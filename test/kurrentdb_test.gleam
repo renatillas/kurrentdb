@@ -106,54 +106,45 @@ pub fn append_to_stream_sends_request_and_decodes_response_test() {
     )
 }
 
-pub fn read_stream_returns_http_request_test() {
+pub fn read_stream_returns_events_test() {
   let assert Ok(client) =
     kurrentdb.from_connection_string("kurrentdb://localhost:2113")
 
-  let assert Ok(http_request) =
+  let assert Ok([]) =
     kurrentdb.read_stream(
       client,
       stream: "booking-abc123",
       options: kurrentdb.default_read_stream_options()
         |> kurrentdb.read_stream_max_count(10),
+      using: fake_read_transport(
+        messages: [],
+        expected_path: "/event_store.client.streams.Streams/Read",
+      ),
+      within: 1000,
     )
-
-  let assert http.Post = http_request.method
-  let assert http.Https = http_request.scheme
-  let assert "localhost" = http_request.host
-  let assert Some(2113) = http_request.port
-  let assert "/event_store.client.streams.Streams/Read" = http_request.path
-  let assert Ok("application/grpc") =
-    request.get_header(http_request, "content-type")
-  let assert Ok([_]) = grpc.decode_frames(http_request.body)
 }
 
-pub fn subscribe_to_stream_returns_http_request_test() {
+pub fn subscribe_to_stream_opens_subscription_test() {
   let assert Ok(client) =
     kurrentdb.from_connection_string("kurrentdb://localhost:2113")
 
-  let assert Ok(http_request) =
+  let assert Ok(kurrentdb.Subscription(..)) =
     kurrentdb.subscribe_to_stream(
       client,
       stream: "booking-abc123",
       options: kurrentdb.default_subscribe_to_stream_options(),
+      using: fake_read_transport(
+        messages: [],
+        expected_path: "/event_store.client.streams.Streams/Read",
+      ),
     )
-
-  let assert http.Post = http_request.method
-  let assert http.Https = http_request.scheme
-  let assert "localhost" = http_request.host
-  let assert Some(2113) = http_request.port
-  let assert "/event_store.client.streams.Streams/Read" = http_request.path
-  let assert Ok("application/grpc") =
-    request.get_header(http_request, "content-type")
-  let assert Ok([_]) = grpc.decode_frames(http_request.body)
 }
 
-pub fn subscribe_to_all_returns_http_request_test() {
+pub fn subscribe_to_all_opens_subscription_test() {
   let assert Ok(client) =
     kurrentdb.from_connection_string("kurrentdb://localhost:2113")
 
-  let assert Ok(http_request) =
+  let assert Ok(kurrentdb.Subscription(..)) =
     kurrentdb.subscribe_to_all(
       client,
       options: kurrentdb.default_subscribe_to_all_options()
@@ -161,46 +152,37 @@ pub fn subscribe_to_all_returns_http_request_test() {
           prefixes: ["booking-"],
           window: kurrentdb.FilterMax(32),
         )),
+      using: fake_read_transport(
+        messages: [],
+        expected_path: "/event_store.client.streams.Streams/Read",
+      ),
     )
-
-  let assert http.Post = http_request.method
-  let assert http.Https = http_request.scheme
-  let assert "localhost" = http_request.host
-  let assert Some(2113) = http_request.port
-  let assert "/event_store.client.streams.Streams/Read" = http_request.path
-  let assert Ok("application/grpc") =
-    request.get_header(http_request, "content-type")
-  let assert Ok([_]) = grpc.decode_frames(http_request.body)
 }
 
-pub fn read_all_returns_http_request_test() {
+pub fn read_all_returns_events_test() {
   let assert Ok(client) =
     kurrentdb.from_connection_string("kurrentdb://localhost:2113")
 
-  let assert Ok(http_request) =
+  let assert Ok([]) =
     kurrentdb.read_all(
       client,
       options: kurrentdb.default_read_all_options()
         |> kurrentdb.read_all_direction(kurrentdb.Backwards)
         |> kurrentdb.read_all_from_position(kurrentdb.ReadAllFromEnd)
         |> kurrentdb.read_all_max_count(10),
+      using: fake_read_transport(
+        messages: [],
+        expected_path: "/event_store.client.streams.Streams/Read",
+      ),
+      within: 1000,
     )
-
-  let assert http.Post = http_request.method
-  let assert http.Https = http_request.scheme
-  let assert "localhost" = http_request.host
-  let assert Some(2113) = http_request.port
-  let assert "/event_store.client.streams.Streams/Read" = http_request.path
-  let assert Ok("application/grpc") =
-    request.get_header(http_request, "content-type")
-  let assert Ok([_]) = grpc.decode_frames(http_request.body)
 }
 
-pub fn read_all_with_event_type_filter_returns_http_request_test() {
+pub fn read_all_with_event_type_filter_returns_events_test() {
   let assert Ok(client) =
     kurrentdb.from_connection_string("kurrentdb://localhost:2113")
 
-  let assert Ok(http_request) =
+  let assert Ok([]) =
     kurrentdb.read_all(
       client,
       options: kurrentdb.default_read_all_options()
@@ -208,11 +190,12 @@ pub fn read_all_with_event_type_filter_returns_http_request_test() {
           prefixes: ["order-"],
           window: kurrentdb.FilterMax(32),
         )),
+      using: fake_read_transport(
+        messages: [],
+        expected_path: "/event_store.client.streams.Streams/Read",
+      ),
+      within: 1000,
     )
-
-  let assert http.Post = http_request.method
-  let assert "/event_store.client.streams.Streams/Read" = http_request.path
-  let assert Ok([_]) = grpc.decode_frames(http_request.body)
 }
 
 pub fn delete_stream_sends_request_and_decodes_response_test() {
@@ -303,16 +286,39 @@ pub fn set_stream_metadata_sends_append_and_decodes_response_test() {
     )
 }
 
-pub fn get_stream_metadata_returns_read_request_test() {
+pub fn get_stream_metadata_reads_and_decodes_metadata_test() {
   let assert Ok(client) =
     kurrentdb.from_connection_string("kurrentdb://localhost:2113")
 
-  let assert Ok(http_request) =
-    kurrentdb.get_stream_metadata(client, stream: "orders")
+  let metadata_message =
+    protobuf.encode_message([
+      protobuf.encode_message_field(
+        1,
+        protobuf.encode_message([
+          protobuf.encode_message_field(
+            1,
+            recorded_event_message(
+              id: "00000000-0000-4000-8000-000000000200",
+              stream: "$$orders",
+              revision: 1,
+              event_type: "$metadata",
+              data: <<"{\"$maxCount\":10}">>,
+            ),
+          ),
+        ]),
+      ),
+    ])
 
-  let assert http.Post = http_request.method
-  let assert "/event_store.client.streams.Streams/Read" = http_request.path
-  let assert Ok([_]) = grpc.decode_frames(http_request.body)
+  let assert Ok(kurrentdb.StreamMetadata(max_count: Some(10), ..)) =
+    kurrentdb.get_stream_metadata(
+      client,
+      stream: "orders",
+      using: fake_read_transport(
+        messages: [kurrentdb.ReadTransportMessage(metadata_message)],
+        expected_path: "/event_store.client.streams.Streams/Read",
+      ),
+      within: 1000,
+    )
 }
 
 pub fn decode_stream_metadata_test() {
@@ -638,5 +644,31 @@ fn metadata_entry(key: String, value: String) -> BitArray {
       protobuf.encode_string_field(1, key),
       protobuf.encode_string_field(2, value),
     ]),
+  )
+}
+
+fn fake_read_transport(
+  messages messages: List(kurrentdb.ReadTransportMessage),
+  expected_path expected_path: String,
+) -> kurrentdb.ReadTransport(List(kurrentdb.ReadTransportMessage), Nil) {
+  kurrentdb.ReadTransport(
+    open: fn(http_request) {
+      let assert http.Post = http_request.method
+      let assert http.Https = http_request.scheme
+      let assert "localhost" = http_request.host
+      let assert Some(2113) = http_request.port
+      assert expected_path == http_request.path
+      let assert Ok("application/grpc") =
+        request.get_header(http_request, "content-type")
+      let assert Ok([_]) = grpc.decode_frames(http_request.body)
+      Ok(messages)
+    },
+    receive: fn(messages, _timeout) {
+      case messages {
+        [message, ..messages] -> Ok(#(messages, message))
+        [] -> Ok(#([], kurrentdb.ReadTransportFinished))
+      }
+    },
+    close: fn(_messages) { Nil },
   )
 }

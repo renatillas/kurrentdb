@@ -78,7 +78,17 @@ pub fn send(
   collect_stream(stream.data, headers: [], status: 0, body: <<>>)
 }
 
-pub fn start_stream_supervisor(
+pub fn read_transport(
+  name: process.Name(factory.Message(StreamStart, Stream)),
+) -> kurrentdb.ReadTransport(GrpcStream, Error) {
+  kurrentdb.ReadTransport(
+    open: fn(request) { open_grpc_stream(name, request) },
+    receive: receive_read_transport_message,
+    close: close_grpc,
+  )
+}
+
+pub fn start_stream(
   name: process.Name(factory.Message(StreamStart, Stream)),
 ) -> Result(actor.Started(factory.Supervisor(StreamStart, Stream)), Error) {
   stream_supervisor_builder(name)
@@ -86,7 +96,7 @@ pub fn start_stream_supervisor(
   |> result.map_error(start_error_to_error)
 }
 
-pub fn supervised_stream_supervisor(
+pub fn supervised_stream(
   name: process.Name(factory.Message(StreamStart, Stream)),
 ) -> supervision.ChildSpecification(factory.Supervisor(StreamStart, Stream)) {
   stream_supervisor_builder(name)
@@ -214,6 +224,20 @@ fn receive_grpc_from_stream(
       Ok(#(stream, GrpcFinished))
     }
     Error(error) -> Error(error)
+  }
+}
+
+fn receive_read_transport_message(
+  stream: GrpcStream,
+  timeout: Int,
+) -> Result(#(GrpcStream, kurrentdb.ReadTransportMessage), Error) {
+  use received <- result.try(receive_grpc(stream, within: timeout))
+  case received {
+    #(stream, Message(message)) ->
+      Ok(#(stream, kurrentdb.ReadTransportMessage(message)))
+    #(stream, GrpcTrailers(_)) ->
+      receive_read_transport_message(stream, timeout)
+    #(stream, GrpcFinished) -> Ok(#(stream, kurrentdb.ReadTransportFinished))
   }
 }
 

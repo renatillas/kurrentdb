@@ -24,8 +24,15 @@ pub type Client {
   Client(endpoint: String, tls: Bool)
 }
 
-pub type Credentials {
-  Credentials(username: String, password: String)
+pub type FrameError {
+  IncompleteHeader
+  CompressedMessage
+  IncompleteMessage(expected_bytes: Int)
+}
+
+pub type ProtobufDecodeError {
+  DecodeError(expected: String, found: String, path: List(String))
+  FieldNotFound(field_number: Int)
 }
 
 pub type Error {
@@ -34,8 +41,8 @@ pub type Error {
   UnknownGrpcStatus(status: String, message: String)
   EmptyResponse
   ManyResponses
-  FrameError(grpc.FrameError)
-  UnableToDecodeGrpcResponse(List(protobuf.DecodeError))
+  FrameError(FrameError)
+  UnableToDecodeGrpcResponse(List(ProtobufDecodeError))
   UnableToDecodeStreamMetadata(json.DecodeError)
   AppendWrongExpectedVersion
   ReadStreamNotFound(String)
@@ -46,11 +53,33 @@ pub type Error {
   DeadlineExceeded
   NotLeader(String)
   UnableToBuildRequest
+  StreamFinished
 }
 
 pub type OperationError(send_error) {
   SendError(send_error)
   KurrentdbError(Error)
+}
+
+pub type ReadTransport(stream, transport_error) {
+  ReadTransport(
+    open: fn(http_request.Request(BitArray)) -> Result(stream, transport_error),
+    receive: fn(stream, Int) ->
+      Result(#(stream, ReadTransportMessage), transport_error),
+    close: fn(stream) -> Nil,
+  )
+}
+
+pub type ReadTransportMessage {
+  ReadTransportMessage(BitArray)
+  ReadTransportFinished
+}
+
+pub type Subscription(stream, transport_error) {
+  Subscription(
+    stream: stream,
+    transport: ReadTransport(stream, transport_error),
+  )
 }
 
 pub type ExpectedRevision {
@@ -513,7 +542,7 @@ pub fn append_to_stream(
 ) -> Result(Append, OperationError(send_error)) {
   use request <- result.try(
     build_append_to_stream_request(client, stream:, events:, options:)
-    |> result.map_error(fn(_) { KurrentdbError(UnableToBuildRequest) }),
+    |> result.replace_error(KurrentdbError(UnableToBuildRequest)),
   )
   use response <- result.try(send(request) |> result.map_error(SendError))
   decode_append_to_stream_response(response)
@@ -546,6 +575,40 @@ pub fn read_stream(
   client: Client,
   stream stream_name: String,
   options options: ReadStreamOptions,
+  using transport: ReadTransport(stream, transport_error),
+  within timeout: Int,
+) -> Result(List(ReadEvent), OperationError(transport_error)) {
+  use messages <- result.try(read_stream_messages(
+    client,
+    stream: stream_name,
+    options:,
+    using: transport,
+    within: timeout,
+  ))
+  Ok(read_events_from_messages(messages))
+}
+
+pub fn read_stream_messages(
+  client: Client,
+  stream stream: String,
+  options options: ReadStreamOptions,
+  using transport: ReadTransport(stream, transport_error),
+  within timeout: Int,
+) -> Result(List(ReadMessage), OperationError(transport_error)) {
+  use request <- result.try(
+    build_read_stream_request(client, stream:, options:)
+    |> result.map_error(fn(_) { KurrentdbError(UnableToBuildRequest) }),
+  )
+  use read_stream <- result.try(
+    transport.open(request) |> result.map_error(SendError),
+  )
+  collect_read_messages(read_stream, transport, timeout, [])
+}
+
+fn build_read_stream_request(
+  client: Client,
+  stream stream_name: String,
+  options options: ReadStreamOptions,
 ) -> Result(http_request.Request(BitArray), Nil) {
   let message =
     stream.ReadReq(
@@ -568,6 +631,25 @@ pub fn subscribe_to_stream(
   client: Client,
   stream stream_name: String,
   options options: SubscribeToStreamOptions,
+  using transport: ReadTransport(stream, transport_error),
+) -> Result(
+  Subscription(stream, transport_error),
+  OperationError(transport_error),
+) {
+  use request <- result.try(
+    build_subscribe_to_stream_request(client, stream: stream_name, options:)
+    |> result.replace_error(KurrentdbError(UnableToBuildRequest)),
+  )
+  use read_stream <- result.try(
+    transport.open(request) |> result.map_error(SendError),
+  )
+  Ok(Subscription(stream: read_stream, transport:))
+}
+
+fn build_subscribe_to_stream_request(
+  client: Client,
+  stream stream_name: String,
+  options options: SubscribeToStreamOptions,
 ) -> Result(http_request.Request(BitArray), Nil) {
   let message =
     stream.SubscribeToStreamReq(
@@ -586,6 +668,24 @@ pub fn subscribe_to_stream(
 }
 
 pub fn subscribe_to_all(
+  client: Client,
+  options options: SubscribeToAllOptions,
+  using transport: ReadTransport(stream, transport_error),
+) -> Result(
+  Subscription(stream, transport_error),
+  OperationError(transport_error),
+) {
+  use request <- result.try(
+    build_subscribe_to_all_request(client, options:)
+    |> result.map_error(fn(_) { KurrentdbError(UnableToBuildRequest) }),
+  )
+  use read_stream <- result.try(
+    transport.open(request) |> result.map_error(SendError),
+  )
+  Ok(Subscription(stream: read_stream, transport: transport))
+}
+
+fn build_subscribe_to_all_request(
   client: Client,
   options options: SubscribeToAllOptions,
 ) -> Result(http_request.Request(BitArray), Nil) {
@@ -704,8 +804,32 @@ pub fn set_stream_metadata(
 pub fn get_stream_metadata(
   client: Client,
   stream stream_name: String,
+  using transport: ReadTransport(stream, transport_error),
+  within timeout: Int,
+) -> Result(StreamMetadata, OperationError(transport_error)) {
+  use request <- result.try(
+    build_get_stream_metadata_request(client, stream: stream_name)
+    |> result.map_error(fn(_) { KurrentdbError(UnableToBuildRequest) }),
+  )
+  use read_stream <- result.try(
+    transport.open(request) |> result.map_error(SendError),
+  )
+  use messages <- result.try(
+    collect_read_messages(read_stream, transport, timeout, []),
+  )
+  case read_events_from_messages(messages) {
+    [Recorded(event), ..] | [Resolved(event: event, ..), ..] ->
+      decode_stream_metadata(event.data)
+      |> result.map_error(KurrentdbError)
+    [] -> Error(KurrentdbError(EmptyResponse))
+  }
+}
+
+fn build_get_stream_metadata_request(
+  client: Client,
+  stream stream_name: String,
 ) -> Result(http_request.Request(BitArray), Nil) {
-  read_stream(
+  build_read_stream_request(
     client,
     stream: metadata_stream_name(stream_name),
     options: default_read_stream_options()
@@ -721,6 +845,37 @@ pub fn decode_stream_metadata(data: BitArray) -> Result(StreamMetadata, Error) {
 }
 
 pub fn read_all(
+  client: Client,
+  options options: ReadAllOptions,
+  using transport: ReadTransport(stream, transport_error),
+  within timeout: Int,
+) -> Result(List(ReadEvent), OperationError(transport_error)) {
+  use messages <- result.try(read_all_messages(
+    client,
+    options:,
+    using: transport,
+    within: timeout,
+  ))
+  Ok(read_events_from_messages(messages))
+}
+
+pub fn read_all_messages(
+  client: Client,
+  options options: ReadAllOptions,
+  using transport: ReadTransport(stream, transport_error),
+  within timeout: Int,
+) -> Result(List(ReadMessage), OperationError(transport_error)) {
+  use request <- result.try(
+    build_read_all_request(client, options:)
+    |> result.map_error(fn(_) { KurrentdbError(UnableToBuildRequest) }),
+  )
+  use read_stream <- result.try(
+    transport.open(request) |> result.map_error(SendError),
+  )
+  collect_read_messages(read_stream, transport, timeout, [])
+}
+
+fn build_read_all_request(
   client: Client,
   options options: ReadAllOptions,
 ) -> Result(http_request.Request(BitArray), Nil) {
@@ -932,9 +1087,19 @@ pub fn decode_append_to_stream_response(
     [] -> Error(EmptyResponse)
     [message] ->
       stream.decode_append_resp(message)
+      |> result.map_error(protobuf_decode_errors_to_errors)
       |> result.map_error(UnableToDecodeGrpcResponse)
       |> result.try(map_append_result)
     _ -> Error(ManyResponses)
+  }
+}
+
+fn protobuf_decode_errors_to_errors(errors: List(protobuf.DecodeError)) {
+  use error <- list.map(errors)
+  case error {
+    protobuf.DecodeError(expected:, found:, path:) ->
+      DecodeError(expected:, found:, path:)
+    protobuf.FieldNotFound(field_number:) -> FieldNotFound(field_number:)
   }
 }
 
@@ -946,6 +1111,7 @@ pub fn decode_delete_stream_response(
     [] -> Error(EmptyResponse)
     [message] ->
       stream.decode_delete_resp(message)
+      |> result.map_error(protobuf_decode_errors_to_errors)
       |> result.map_error(UnableToDecodeGrpcResponse)
       |> result.map(map_delete_result)
     _ -> Error(ManyResponses)
@@ -960,6 +1126,7 @@ pub fn decode_tombstone_stream_response(
     [] -> Error(EmptyResponse)
     [message] ->
       stream.decode_tombstone_resp(message)
+      |> result.map_error(protobuf_decode_errors_to_errors)
       |> result.map_error(UnableToDecodeGrpcResponse)
       |> result.map(map_tombstone_result)
     _ -> Error(ManyResponses)
@@ -970,8 +1137,108 @@ pub fn decode_read_stream_message(
   message: BitArray,
 ) -> Result(ReadMessage, Error) {
   stream.decode_read_resp(message)
+  |> result.map_error(protobuf_decode_errors_to_errors)
   |> result.map_error(UnableToDecodeGrpcResponse)
   |> result.try(map_read_result)
+}
+
+pub fn receive_subscription_message(
+  subscription: Subscription(stream, transport_error),
+  within timeout: Int,
+) -> Result(
+  #(Subscription(stream, transport_error), ReadMessage),
+  OperationError(transport_error),
+) {
+  let Subscription(stream: read_stream, transport:) = subscription
+  use received <- result.try(
+    transport.receive(read_stream, timeout)
+    |> result.map_error(SendError),
+  )
+  case received {
+    #(read_stream, ReadTransportMessage(message)) -> {
+      use read_message <- result.try(
+        decode_read_stream_message(message)
+        |> result.map_error(KurrentdbError),
+      )
+      Ok(#(Subscription(stream: read_stream, transport:), read_message))
+    }
+    #(_, ReadTransportFinished) -> Error(KurrentdbError(StreamFinished))
+  }
+}
+
+pub fn receive_subscription_event(
+  subscription: Subscription(stream, transport_error),
+  within timeout: Int,
+) -> Result(
+  #(Subscription(stream, transport_error), ReadEvent),
+  OperationError(transport_error),
+) {
+  use received <- result.try(receive_subscription_message(
+    subscription,
+    within: timeout,
+  ))
+  let #(subscription, message) = received
+  case message {
+    ReadEvent(event) -> Ok(#(subscription, event))
+    SubscriptionConfirmed(_)
+    | Checkpoint(_)
+    | CaughtUp(_)
+    | FellBehind(_)
+    | FirstStreamPosition(_)
+    | LastStreamPosition(_)
+    | LastAllStreamPosition(_)
+    | ReadIgnored -> receive_subscription_event(subscription, within: timeout)
+  }
+}
+
+pub fn close_subscription(
+  subscription: Subscription(stream, transport_error),
+) -> Nil {
+  let Subscription(stream:, transport:) = subscription
+  transport.close(stream)
+}
+
+fn collect_read_messages(
+  read_stream: stream,
+  transport: ReadTransport(stream, transport_error),
+  timeout: Int,
+  messages: List(ReadMessage),
+) -> Result(List(ReadMessage), OperationError(transport_error)) {
+  use received <- result.try(
+    transport.receive(read_stream, timeout)
+    |> result.map_error(SendError),
+  )
+  case received {
+    #(read_stream, ReadTransportMessage(message)) -> {
+      use read_message <- result.try(
+        decode_read_stream_message(message)
+        |> result.map_error(KurrentdbError),
+      )
+      collect_read_messages(read_stream, transport, timeout, [
+        read_message,
+        ..messages
+      ])
+    }
+    #(_, ReadTransportFinished) -> Ok(list.reverse(messages))
+  }
+}
+
+fn read_events_from_messages(messages: List(ReadMessage)) -> List(ReadEvent) {
+  messages
+  |> list.fold([], fn(events, message) {
+    case message {
+      ReadEvent(event) -> [event, ..events]
+      SubscriptionConfirmed(_)
+      | Checkpoint(_)
+      | CaughtUp(_)
+      | FellBehind(_)
+      | FirstStreamPosition(_)
+      | LastStreamPosition(_)
+      | LastAllStreamPosition(_)
+      | ReadIgnored -> events
+    }
+  })
+  |> list.reverse
 }
 
 fn decode_response_messages(
@@ -987,7 +1254,17 @@ fn decode_response_messages(
 
 fn decode_grpc_body(body: BitArray) -> Result(List(BitArray), Error) {
   grpc.decode_frames(body)
-  |> result.map_error(FrameError)
+  |> result.map_error(grpc_frame_error_to_frame_error)
+}
+
+fn grpc_frame_error_to_frame_error(error: grpc.FrameError) {
+  case error {
+    grpc.IncompleteHeader -> IncompleteHeader
+    grpc.CompressedMessage -> CompressedMessage
+    grpc.IncompleteMessage(expected_bytes:) ->
+      IncompleteMessage(expected_bytes:)
+  }
+  |> FrameError
 }
 
 fn map_append_result(response: stream.AppendResp) -> Result(Append, Error) {
@@ -995,7 +1272,7 @@ fn map_append_result(response: stream.AppendResp) -> Result(Append, Error) {
     stream.AppendSuccess(current_revision, position) ->
       Ok(AppendSuccess(
         current_revision: current_revision,
-        position: position_from_protobuf_position(position),
+        position: stream_position_to_position(position),
       ))
     stream.AppendWrongExpectedVersion -> Error(AppendWrongExpectedVersion)
   }
@@ -1008,15 +1285,23 @@ fn map_read_result(response: stream.ReadResp) -> Result(ReadMessage, Error) {
       Ok(SubscriptionConfirmed(subscription_id))
     stream.ReadStreamNotFound(stream) -> Error(ReadStreamNotFound(stream))
     stream.Checkpoint(position) ->
-      Ok(Checkpoint(position_from_protobuf_position(position)))
+      Ok(Checkpoint(stream_position_to_position(position)))
     stream.CaughtUp(checkpoint) ->
-      Ok(CaughtUp(subscription_checkpoint_from_proto(checkpoint)))
+      Ok(
+        CaughtUp(stream_subscription_checkpoint_to_subscription_checkpoint(
+          checkpoint,
+        )),
+      )
     stream.FellBehind(checkpoint) ->
-      Ok(FellBehind(subscription_checkpoint_from_proto(checkpoint)))
+      Ok(
+        FellBehind(stream_subscription_checkpoint_to_subscription_checkpoint(
+          checkpoint,
+        )),
+      )
     stream.FirstStreamPosition(position) -> Ok(FirstStreamPosition(position))
     stream.LastStreamPosition(position) -> Ok(LastStreamPosition(position))
     stream.LastAllStreamPosition(position) ->
-      Ok(LastAllStreamPosition(position_from_protobuf_position(position)))
+      Ok(LastAllStreamPosition(stream_position_to_position(position)))
     stream.ReadIgnored -> Ok(ReadIgnored)
   }
 }
@@ -1033,13 +1318,11 @@ fn read_event_from_proto(event: stream.ReadEvent) -> ReadEvent {
 }
 
 fn map_delete_result(response: stream.DeleteResp) -> Delete {
-  let stream.DeleteSuccess(position) = response
-  DeleteSuccess(position: position_from_protobuf_position(position))
+  DeleteSuccess(position: stream_position_to_position(response.position))
 }
 
 fn map_tombstone_result(response: stream.TombstoneResp) -> Tombstone {
-  let stream.TombstoneSuccess(position) = response
-  TombstoneSuccess(position: position_from_protobuf_position(position))
+  TombstoneSuccess(position: stream_position_to_position(response.position))
 }
 
 fn recorded_event_from_proto(event: stream.RecordedEvent) -> RecordedEvent {
@@ -1066,7 +1349,7 @@ fn recorded_event_from_proto(event: stream.RecordedEvent) -> RecordedEvent {
   )
 }
 
-fn position_from_protobuf_position(position: stream.Position) -> Position {
+fn stream_position_to_position(position: stream.Position) -> Position {
   case position {
     stream.NoPositionReturned -> NoPositionReturned
     stream.Position(commit_position, prepare_position) ->
@@ -1077,7 +1360,7 @@ fn position_from_protobuf_position(position: stream.Position) -> Position {
   }
 }
 
-fn subscription_checkpoint_from_proto(
+fn stream_subscription_checkpoint_to_subscription_checkpoint(
   checkpoint: stream.SubscriptionCheckpoint,
 ) -> SubscriptionCheckpoint {
   case checkpoint {
@@ -1085,12 +1368,12 @@ fn subscription_checkpoint_from_proto(
     stream.StreamRevisionCheckpoint(revision) ->
       StreamRevisionCheckpoint(revision)
     stream.AllPositionCheckpoint(position) ->
-      AllPositionCheckpoint(position_from_protobuf_position(position))
+      AllPositionCheckpoint(stream_position_to_position(position))
   }
 }
 
 fn grpc_error(headers: List(#(String, String)), status: String) -> Error {
-  let message = grpc_message(headers)
+  let message = get_grpc_message(headers)
   case status {
     "4" -> DeadlineExceeded
     "5" -> ReadStreamNotFound(message)
@@ -1099,18 +1382,18 @@ fn grpc_error(headers: List(#(String, String)), status: String) -> Error {
     "10" -> AppendWrongExpectedVersion
     "14" -> Unavailable
     "16" -> NotAuthenticated
-    _ -> UnknownGrpcStatus(status: status, message: message)
+    _ -> UnknownGrpcStatus(status:, message:)
   }
 }
 
 fn failed_precondition_error(message: String) -> Error {
   case string.contains(message, "is deleted") {
     True -> StreamDeleted(message)
-    False -> UnknownGrpcStatus(status: "9", message: message)
+    False -> UnknownGrpcStatus(status: "9", message:)
   }
 }
 
-fn grpc_message(headers: List(#(String, String))) -> String {
+fn get_grpc_message(headers: List(#(String, String))) -> String {
   case list.key_find(headers, "grpc-message") {
     Ok(message) -> message
     Error(Nil) -> ""

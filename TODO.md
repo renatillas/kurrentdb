@@ -101,8 +101,8 @@
 ## Backend runtime
 
 - Consider a shared HTTP/2 connection manager only after the one-connection-per-stream implementation is correct.
-- Add higher-level collected read helpers if they remain useful after stream APIs settle.
-- Add ergonomic cancellable subscription consumers.
+- Add higher-level collected read helpers if they remain useful after stream APIs settle. Initial transport-injected `read_stream` and `read_all` event collectors are in place.
+- Add ergonomic cancellable subscription consumers. Initial transport-injected subscriptions and core receive helpers are in place.
 - Add graceful shutdown for named stream supervisors.
 - Add reconnection policy.
 - Add retry policy.
@@ -137,4 +137,6 @@
 - `subscribe_to_stream` reuses `ReadMessage` for subscription confirmations and events because KurrentDB uses the same `ReadResp` stream. Explicit cancellation ergonomics and subscription-specific wrapper types are still deferred.
 - `subscribe_to_all` uses a subscription-specific filter encoder that sets `checkpointIntervalMultiplier` to `1`. Bounded `read_all` keeps the server default because it already works without explicit checkpoint configuration, while filtered `$all` subscriptions closed immediately without it.
 - `ReadMessage.ReadEvent` now carries `Recorded(event)` or `Resolved(link, event)` instead of a raw `RecordedEvent`. This is a deliberate breaking change before publication so resolved-link semantics are not hidden from users.
-- Unary public operations now accept an injected `send` function and decode responses internally. This keeps the core sans-IO while avoiding a separate public request-builder API for append, delete, tombstone, and set-stream-metadata. Streaming reads/subscriptions still expose requests because they need a receive loop; the next ergonomics pass should apply the same transport-injection idea to streaming with a richer transport shape.
+- Unary public operations now accept an injected `send` function and decode responses internally. This keeps the core sans-IO while avoiding a separate public request-builder API for append, delete, tombstone, and set-stream-metadata.
+- Streaming public operations now accept an injected `ReadTransport`, keeping core sans-IO while hiding raw request construction and gRPC frame decoding from users. `read_stream` and `read_all` return `List(ReadEvent)` by default; `read_stream_messages` and `read_all_messages` expose bookkeeping messages for advanced users.
+- Subscriptions now return a core `Subscription` and can be consumed with `receive_subscription_message` or `receive_subscription_event`. Opening a subscription does not consume a confirmation automatically, so callers that append immediately after subscribing should first receive an initial subscription message to avoid racing server registration.
