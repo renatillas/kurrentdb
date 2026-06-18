@@ -111,7 +111,7 @@ pub fn read_stream_returns_events_test() {
     kurrentdb.from_connection_string("kurrentdb://localhost:2113")
 
   let assert Ok([]) =
-    kurrentdb.read_stream(
+    kurrentdb.read_stream_events(
       client,
       stream: "booking-abc123",
       options: kurrentdb.default_read_stream_options()

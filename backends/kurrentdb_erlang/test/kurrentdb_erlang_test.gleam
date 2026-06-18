@@ -16,6 +16,7 @@ const connection_string = "kurrentdb://localhost:2113?tls=false"
 
 pub fn append_to_stream_can_be_sent_test() {
   let name = process.new_name("kurrentdb")
+
   let assert Ok(_supervisor) = kurrentdb_erlang.start_stream(name)
 
   let assert Ok(client) = kurrentdb.from_connection_string(connection_string)
@@ -26,6 +27,7 @@ pub fn append_to_stream_can_be_sent_test() {
       event_type: "kurrentdb-erlang-test",
       data: json.object([#("runtime", json.string("erlang"))]),
     )
+
   let assert Ok(kurrentdb.AppendSuccess(current_revision: 0, position: _)) =
     kurrentdb.append_to_stream(
       client,
@@ -33,7 +35,7 @@ pub fn append_to_stream_can_be_sent_test() {
       events: [event],
       options: kurrentdb.default_append_options()
         |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name, _),
+      using: kurrentdb_erlang.send(name),
     )
 }
 
@@ -49,6 +51,7 @@ pub fn append_to_stream_can_use_injected_sender_test() {
       event_type: "kurrentdb-erlang-grpc-stream-test",
       data: json.object([#("runtime", json.string("erlang"))]),
     )
+
   let assert Ok(kurrentdb.AppendSuccess(current_revision: 0, position: _)) =
     kurrentdb.append_to_stream(
       client,
@@ -56,7 +59,7 @@ pub fn append_to_stream_can_use_injected_sender_test() {
       events: [event],
       options: kurrentdb.default_append_options()
         |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name, _),
+      using: kurrentdb_erlang.send(name),
     )
 }
 
@@ -79,7 +82,7 @@ pub fn stream_can_be_read_test() {
       events: [event],
       options: kurrentdb.default_append_options()
         |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name, _),
+      using: kurrentdb_erlang.send(name),
     )
 
   let assert Ok([
@@ -90,7 +93,7 @@ pub fn stream_can_be_read_test() {
       ..,
     )),
   ]) =
-    kurrentdb.read_stream(
+    kurrentdb.read_stream_events(
       client,
       stream: stream_name,
       options: kurrentdb.default_read_stream_options()
@@ -133,7 +136,7 @@ pub fn stream_can_be_subscribed_to_test() {
       events: [event],
       options: kurrentdb.default_append_options()
         |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name, _),
+      using: kurrentdb_erlang.send(name),
     )
 
   let assert Ok(#(
@@ -144,6 +147,7 @@ pub fn stream_can_be_subscribed_to_test() {
       ..,
     )),
   )) = kurrentdb.receive_subscription_event(subscription, within: 10_000)
+
   assert event_stream == stream_name
   let assert <<"{\"subscribe\":\"stream\"}">> = data
 }
@@ -182,7 +186,7 @@ pub fn all_stream_can_be_subscribed_to_test() {
       events: [event],
       options: kurrentdb.default_append_options()
         |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name, _),
+      using: kurrentdb_erlang.send(name),
     )
 
   let assert Ok(#(
@@ -218,7 +222,7 @@ pub fn all_stream_can_be_read_test() {
       events: [event],
       options: kurrentdb.default_append_options()
         |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name, _),
+      using: kurrentdb_erlang.send(name),
     )
 
   let assert Ok([
@@ -264,7 +268,7 @@ pub fn stream_can_be_deleted_test() {
       events: [event],
       options: kurrentdb.default_append_options()
         |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name, _),
+      using: kurrentdb_erlang.send(name),
     )
 
   let assert Ok(kurrentdb.DeleteSuccess(position: _)) =
@@ -273,7 +277,7 @@ pub fn stream_can_be_deleted_test() {
       stream: stream_name,
       options: kurrentdb.default_delete_options()
         |> kurrentdb.delete_expected_revision(kurrentdb.Any),
-      using: fn(request) { kurrentdb_erlang.send(name, request) },
+      using: kurrentdb_erlang.send(name),
     )
 }
 
@@ -297,7 +301,7 @@ pub fn stream_can_be_tombstoned_test() {
       events: [event],
       options: kurrentdb.default_append_options()
         |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name, _),
+      using: kurrentdb_erlang.send(name),
     )
 
   let assert Ok(kurrentdb.TombstoneSuccess(position: _)) =
@@ -306,7 +310,7 @@ pub fn stream_can_be_tombstoned_test() {
       stream: stream_name,
       options: kurrentdb.default_tombstone_options()
         |> kurrentdb.tombstone_expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name, _),
+      using: kurrentdb_erlang.send(name),
     )
 }
 
@@ -330,7 +334,7 @@ pub fn stream_metadata_can_be_set_and_read_test() {
       metadata: metadata,
       uuid: "00000000-0000-4000-8000-000000000006",
       options: kurrentdb.default_set_stream_metadata_options(),
-      using: kurrentdb_erlang.send(name, _),
+      using: kurrentdb_erlang.send(name),
     )
 
   let assert Ok(kurrentdb.StreamMetadata(

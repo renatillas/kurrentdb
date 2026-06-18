@@ -14,12 +14,15 @@ import gleam/result
 import kurrentdb
 import kurrentdb/internal/grpc
 
+pub type FrameError
+
 pub type Error {
   StreamFailed(String)
   StreamTimeout
   UnableToStartStream(String)
-  FrameError(grpc.FrameError)
-  DecodeError(kurrentdb.Error)
+  IncompleteHeader
+  CompressedMessage
+  IncompleteMessage(expected_bytes: Int)
 }
 
 pub opaque type Stream {
@@ -36,7 +39,7 @@ pub opaque type StreamStart {
   )
 }
 
-pub type StreamMessage {
+type StreamMessage {
   ResponseStarted(status: Int, headers: List(#(String, String)))
   Data(BitArray)
   Trailers(List(#(String, String)))
@@ -51,7 +54,7 @@ pub opaque type GrpcStream {
   )
 }
 
-pub type GrpcMessage {
+type GrpcMessage {
   Message(BitArray)
   GrpcTrailers(List(#(String, String)))
   GrpcFinished
@@ -72,17 +75,18 @@ type StreamActorState {
 
 pub fn send(
   name: process.Name(factory.Message(StreamStart, Stream)),
-  request: Request(BitArray),
-) -> Result(response.Response(BitArray), Error) {
-  use stream <- result.try(open_stream(name, request))
-  collect_stream(stream.data, headers: [], status: 0, body: <<>>)
+) -> fn(Request(BitArray)) -> Result(response.Response(BitArray), Error) {
+  fn(request) {
+    use stream <- result.try(open_stream(name, request))
+    collect_stream(stream.data, headers: [], status: 0, body: <<>>)
+  }
 }
 
 pub fn read_transport(
   name: process.Name(factory.Message(StreamStart, Stream)),
 ) -> kurrentdb.ReadTransport(GrpcStream, Error) {
   kurrentdb.ReadTransport(
-    open: fn(request) { open_grpc_stream(name, request) },
+    open: open_grpc_stream(name),
     receive: receive_read_transport_message,
     close: close_grpc,
   )
@@ -103,7 +107,7 @@ pub fn supervised_stream(
   |> factory.supervised
 }
 
-pub fn open_stream(
+fn open_stream(
   name: process.Name(factory.Message(StreamStart, Stream)),
   request: Request(BitArray),
 ) -> Result(actor.Started(Stream), Error) {
@@ -113,21 +117,22 @@ pub fn open_stream(
   |> result.map_error(start_error_to_error)
 }
 
-pub fn open_grpc_stream(
+fn open_grpc_stream(
   name: process.Name(factory.Message(StreamStart, Stream)),
-  request: Request(BitArray),
-) -> Result(GrpcStream, Error) {
-  use stream <- result.try(open_stream(name, request))
-  Ok(
-    GrpcStream(
-      stream: stream.data,
-      decoder: grpc.new_frame_decoder(),
-      pending: [],
-    ),
-  )
+) -> fn(Request(BitArray)) -> Result(GrpcStream, Error) {
+  fn(request) {
+    use stream <- result.try(open_stream(name, request))
+    Ok(
+      GrpcStream(
+        stream: stream.data,
+        decoder: grpc.new_frame_decoder(),
+        pending: [],
+      ),
+    )
+  }
 }
 
-pub fn receive_grpc(
+fn receive_grpc(
   stream: GrpcStream,
   within timeout: Int,
 ) -> Result(#(GrpcStream, GrpcMessage), Error) {
@@ -138,7 +143,7 @@ pub fn receive_grpc(
   }
 }
 
-pub fn receive(
+fn receive(
   stream: Stream,
   within timeout: Int,
 ) -> Result(StreamMessage, Error) {
@@ -148,11 +153,11 @@ pub fn receive(
   }
 }
 
-pub fn close(stream: Stream) -> Nil {
+fn close(stream: Stream) -> Nil {
   process.send(stream.control, Close)
 }
 
-pub fn close_grpc(stream: GrpcStream) -> Nil {
+fn close_grpc(stream: GrpcStream) -> Nil {
   close(stream.stream)
 }
 
@@ -207,7 +212,7 @@ fn receive_grpc_from_stream(
     Ok(Data(data)) -> {
       use decoded <- result.try(
         grpc.decode_frame_chunk(stream.decoder, data)
-        |> result.map_error(FrameError),
+        |> result.map_error(grpc_frame_error_to_frame_error),
       )
       let #(decoder, messages) = decoded
       receive_grpc(
@@ -219,11 +224,20 @@ fn receive_grpc_from_stream(
     Ok(Finished) -> {
       use Nil <- result.try(
         grpc.finish_frame_decoder(stream.decoder)
-        |> result.map_error(FrameError),
+        |> result.map_error(grpc_frame_error_to_frame_error),
       )
       Ok(#(stream, GrpcFinished))
     }
     Error(error) -> Error(error)
+  }
+}
+
+fn grpc_frame_error_to_frame_error(frame_error: grpc.FrameError) -> Error {
+  case frame_error {
+    grpc.IncompleteHeader -> IncompleteHeader
+    grpc.CompressedMessage -> CompressedMessage
+    grpc.IncompleteMessage(expected_bytes:) ->
+      IncompleteMessage(expected_bytes:)
   }
 }
 

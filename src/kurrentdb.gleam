@@ -1,5 +1,173 @@
 //// KurrentDB client core.
 ////
+//// <script>
+//// const docs = [
+////   {
+////     header: "Client",
+////     functions: ["new", "from_connection_string"]
+////   },
+////   {
+////     header: "Event",
+////     functions: ["binary_event", "json_event", "metadata"]
+////   },
+////   {
+////     header: "Append",
+////     functions: [
+////       "append_to_stream",
+////       "default_append_options",
+////       "expected_revision"
+////     ]
+////   },
+////   {
+////     header: "Delete",
+////     functions: [
+////       "default_delete_options",
+////       "delete_expected_revision",
+////       "delete_stream"
+////     ]
+////   },
+////   {
+////     header: "Tombstone",
+////     functions: [
+////       "default_tombstone_options",
+////       "tombstone_expected_revision",
+////       "tombstone_stream"
+////     ]
+////   },
+////   {
+////     header: "Read Stream",
+////     functions: [
+////       "default_read_stream_options",
+////       "read_stream_events",
+////       "read_stream_from_revision",
+////       "read_stream_max_count",
+////       "read_stream_messages",
+////       "read_stream_read_direction",
+////       "read_stream_resolve_links"
+////     ]
+////   },
+////   {
+////     header: "Read All",
+////     functions: [
+////       "default_read_all_options",
+////       "read_all",
+////       "read_all_direction",
+////       "read_all_filter",
+////       "read_all_from_position",
+////       "read_all_max_count",
+////       "read_all_messages",
+////       "read_all_resolve_links"
+////     ]
+////   },
+////   {
+////     header: "Subscribe to Stream",
+////     functions: [
+////       "default_subscribe_to_stream_options",
+////       "subscribe_to_stream",
+////       "subscribe_to_stream_from_revision",
+////       "subscribe_to_stream_read_direction",
+////       "subscribe_to_stream_resolve_links"
+////     ]
+////   },
+////   {
+////     header: "Subscribe to All",
+////     functions: [
+////       "default_subscribe_to_all_options",
+////       "subscribe_to_all",
+////       "subscribe_to_all_direction",
+////       "subscribe_to_all_filter",
+////       "subscribe_to_all_from_position",
+////       "subscribe_to_all_resolve_links"
+////     ]
+////   },
+////   {
+////     header: "Subscription",
+////     functions: [
+////       "close_subscription",
+////       "receive_subscription_event",
+////       "receive_subscription_message"
+////     ]
+////   },
+////   {
+////     header: "Stream Metadata",
+////     functions: [
+////       "default_set_stream_metadata_options",
+////       "get_stream_metadata",
+////       "metadata_cache_control",
+////       "metadata_custom",
+////       "metadata_expected_revision",
+////       "metadata_max_age",
+////       "metadata_max_count",
+////       "metadata_truncate_before",
+////       "metadata_acl",
+////       "set_stream_metadata",
+////       "stream_metadata"
+////     ]
+////   },
+////   {
+////     header: "Stream ACL",
+////     functions: [
+////       "acl_delete_roles",
+////       "acl_meta_read_roles",
+////       "acl_meta_write_roles",
+////       "acl_read_roles",
+////       "acl_write_roles",
+////       "stream_acl"
+////     ]
+////   }
+//// ]
+////
+//// const callback = () => {
+////   const list = document.querySelector(".sidebar > ul:last-of-type")
+////   const sortedLists = document.createDocumentFragment()
+////   const sortedMembers = document.createDocumentFragment()
+////
+////   for (const section of docs) {
+////     sortedLists.append((() => {
+////       const node = document.createElement("h3")
+////       node.append(section.header)
+////       return node
+////     })())
+////     sortedMembers.append((() => {
+////       const node = document.createElement("h2")
+////       node.append(section.header)
+////       return node
+////     })())
+////
+////     const sortedList = document.createElement("ul")
+////     sortedLists.append(sortedList)
+////
+////     const sortedFunctions = [...section.functions].sort()
+////
+////     for (const funcName of sortedFunctions) {
+////       const href = `#${funcName}`
+////       const member = document.querySelector(
+////         `.member:has(h2 > a[href="${href}"])`
+////       )
+////       const sidebar = list.querySelector(`li:has(a[href="${href}"])`)
+////       sortedList.append(sidebar)
+////       sortedMembers.append(member)
+////     }
+////   }
+////
+////   document.querySelector(".sidebar").insertBefore(sortedLists, list)
+////   document
+////     .querySelector(".module-members:has(#module-values)")
+////     .insertBefore(
+////       sortedMembers,
+////       document.querySelector("#module-values").nextSibling
+////     )
+//// }
+////
+//// document.readyState !== "loading"
+////   ? callback()
+////   : document.addEventListener(
+////     "DOMContentLoaded",
+////     callback,
+////     { once: true }
+////   )
+//// </script>
+////
 
 import gleam/bit_array
 import gleam/dynamic/decode
@@ -544,7 +712,9 @@ pub fn append_to_stream(
     build_append_to_stream_request(client, stream:, events:, options:)
     |> result.replace_error(KurrentdbError(UnableToBuildRequest)),
   )
+
   use response <- result.try(send(request) |> result.map_error(SendError))
+
   decode_append_to_stream_response(response)
   |> result.map_error(KurrentdbError)
 }
@@ -571,21 +741,22 @@ fn build_append_to_stream_request(
   )
 }
 
-pub fn read_stream(
+pub fn read_stream_events(
   client: Client,
   stream stream_name: String,
   options options: ReadStreamOptions,
   using transport: ReadTransport(stream, transport_error),
   within timeout: Int,
 ) -> Result(List(ReadEvent), OperationError(transport_error)) {
-  use messages <- result.try(read_stream_messages(
+  use messages <- result.map(read_stream_messages(
     client,
     stream: stream_name,
     options:,
     using: transport,
     within: timeout,
   ))
-  Ok(read_events_from_messages(messages))
+
+  read_events_from_messages(messages)
 }
 
 pub fn read_stream_messages(
@@ -599,9 +770,11 @@ pub fn read_stream_messages(
     build_read_stream_request(client, stream:, options:)
     |> result.map_error(fn(_) { KurrentdbError(UnableToBuildRequest) }),
   )
+
   use read_stream <- result.try(
     transport.open(request) |> result.map_error(SendError),
   )
+
   collect_read_messages(read_stream, transport, timeout, [])
 }
 
@@ -839,6 +1012,7 @@ fn build_get_stream_metadata_request(
   )
 }
 
+@internal
 pub fn decode_stream_metadata(data: BitArray) -> Result(StreamMetadata, Error) {
   json.parse_bits(data, stream_metadata_decoder())
   |> result.map_error(UnableToDecodeStreamMetadata)
@@ -1079,6 +1253,7 @@ fn expected_revision_to_proto(
   }
 }
 
+@internal
 pub fn decode_append_to_stream_response(
   response: response.Response(BitArray),
 ) -> Result(Append, Error) {
@@ -1103,6 +1278,7 @@ fn protobuf_decode_errors_to_errors(errors: List(protobuf.DecodeError)) {
   }
 }
 
+@internal
 pub fn decode_delete_stream_response(
   response: response.Response(BitArray),
 ) -> Result(Delete, Error) {
@@ -1118,6 +1294,7 @@ pub fn decode_delete_stream_response(
   }
 }
 
+@internal
 pub fn decode_tombstone_stream_response(
   response: response.Response(BitArray),
 ) -> Result(Tombstone, Error) {
@@ -1133,6 +1310,7 @@ pub fn decode_tombstone_stream_response(
   }
 }
 
+@internal
 pub fn decode_read_stream_message(
   message: BitArray,
 ) -> Result(ReadMessage, Error) {
@@ -1208,6 +1386,7 @@ fn collect_read_messages(
     transport.receive(read_stream, timeout)
     |> result.map_error(SendError),
   )
+
   case received {
     #(read_stream, ReadTransportMessage(message)) -> {
       use read_message <- result.try(
