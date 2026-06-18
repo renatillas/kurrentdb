@@ -226,11 +226,11 @@ pub fn all_stream_can_be_read_test() {
     )
 
   let assert Ok([
-    kurrentdb.Recorded(kurrentdb.RecordedEvent(
+    kurrentdb.ReadEvent(kurrentdb.Recorded(kurrentdb.RecordedEvent(
       stream: event_stream,
       data: data,
       ..,
-    )),
+    ))),
   ]) =
     kurrentdb.read_all(
       client,

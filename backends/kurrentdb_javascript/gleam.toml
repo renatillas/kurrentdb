@@ -1,0 +1,16 @@
+name = "kurrentdb_javascript"
+version = "1.0.0"
+target = "javascript"
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+gleam_javascript = ">= 1.0.0 and < 2.0.0"
+gleam_http = ">= 4.0.0 and < 5.0.0"
+kurrentdb = { path = "../.." }
+
+[dev_dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"
+gleam_json = ">= 3.1.0 and < 4.0.0"
+
+[javascript]
+runtime = "bun"

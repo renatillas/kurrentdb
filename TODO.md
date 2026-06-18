@@ -110,6 +110,12 @@
 - Add deadline options.
 - Add TLS certificate options.
 
+## JavaScript backend
+
+- Fix 64-bit varint decoder (`do_decode_varint` uses `int.bitwise_shift_left` which compiles to 32-bit JS `<<`; move failure point from 2³¹ to 2⁵³ via BigInt FFI). New file: `src/kurrentdb/internal/protobuf_ffi.mjs`.
+- Fix `<<value:64>>` warnings (3 sites: `protobuf.gleam:150`, `stream.gleam:745,798`) by replacing with `int_from_64bit_be` helper via FFI.
+- Drop `gleam_fetch` from `gleam.toml` dependencies (no longer used by JS backend).
+
 ## Testing and docs
 
 - Add more repeat-safe integration fixtures.

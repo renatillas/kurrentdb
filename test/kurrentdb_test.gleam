@@ -1,3 +1,4 @@
+import gleam/dynamic/decode
 import gleam/http
 import gleam/http/request
 import gleam/http/response
@@ -615,6 +616,146 @@ pub fn finish_incomplete_grpc_frame_returns_error_test() {
     grpc.finish_frame_decoder(decoder)
 }
 
+pub fn event_type_accessor_returns_type_from_recorded_event_test() {
+  let assert Ok(kurrentdb.ReadEvent(event)) =
+    kurrentdb.decode_read_stream_message(read_event_good_message())
+
+  let assert "order-created" = kurrentdb.event_type(event)
+}
+
+pub fn event_type_accessor_returns_type_from_resolved_event_test() {
+  let assert Ok(kurrentdb.ReadEvent(event)) =
+    kurrentdb.decode_read_stream_message(read_event_resolved_message())
+
+  let assert "order-created" = kurrentdb.event_type(event)
+}
+
+pub fn event_type_accessor_returns_empty_string_when_missing_test() {
+  let message =
+    protobuf.encode_message([
+      protobuf.encode_message_field(
+        1,
+        protobuf.encode_message([
+          protobuf.encode_message_field(
+            1,
+            recorded_event_message_with_content_type(
+              id: "00000000-0000-4000-8000-000000000100",
+              stream: "orders",
+              revision: 7,
+              event_type: "",
+              data: <<"{}">>,
+              content_type: "application/json",
+            ),
+          ),
+        ]),
+      ),
+    ])
+
+  let assert Ok(kurrentdb.ReadEvent(event)) =
+    kurrentdb.decode_read_stream_message(message)
+
+  let assert "" = kurrentdb.event_type(event)
+}
+
+pub fn content_type_accessor_returns_content_type_test() {
+  let assert Ok(kurrentdb.ReadEvent(event)) =
+    kurrentdb.decode_read_stream_message(read_event_good_message())
+
+  let assert "application/json" = kurrentdb.content_type(event)
+}
+
+pub fn content_type_accessor_returns_empty_string_when_missing_test() {
+  let message =
+    protobuf.encode_message([
+      protobuf.encode_message_field(
+        1,
+        protobuf.encode_message([
+          protobuf.encode_message_field(
+            1,
+            recorded_event_message_with_content_type(
+              id: "00000000-0000-4000-8000-000000000100",
+              stream: "orders",
+              revision: 7,
+              event_type: "order-created",
+              data: <<"{}">>,
+              content_type: "",
+            ),
+          ),
+        ]),
+      ),
+    ])
+
+  let assert Ok(kurrentdb.ReadEvent(event)) =
+    kurrentdb.decode_read_stream_message(message)
+
+  let assert "" = kurrentdb.content_type(event)
+}
+
+pub fn binary_data_accessor_returns_raw_bytes_from_recorded_event_test() {
+  let assert Ok(kurrentdb.ReadEvent(event)) =
+    kurrentdb.decode_read_stream_message(read_event_good_message())
+
+  let assert <<"{\"orderId\":\"1\"}">> = kurrentdb.binary_data(event)
+}
+
+pub fn json_data_accessor_decodes_json_from_recorded_event_test() {
+  let assert Ok(kurrentdb.ReadEvent(event)) =
+    kurrentdb.decode_read_stream_message(read_event_good_message())
+
+  let assert Ok("1") =
+    kurrentdb.json_data(event, json_field_decoder("orderId"))
+}
+
+pub fn json_data_accessor_returns_error_on_invalid_json_test() {
+  let message =
+    protobuf.encode_message([
+      protobuf.encode_message_field(
+        1,
+        protobuf.encode_message([
+          protobuf.encode_message_field(
+            1,
+            recorded_event_message(
+              id: "00000000-0000-4000-8000-000000000100",
+              stream: "orders",
+              revision: 7,
+              event_type: "order-created",
+              data: <<"not-json">>,
+            ),
+          ),
+        ]),
+      ),
+    ])
+
+  let assert Ok(kurrentdb.ReadEvent(event)) =
+    kurrentdb.decode_read_stream_message(message)
+
+  let assert Error(kurrentdb.JsonDecodeError(_)) =
+    kurrentdb.json_data(event, json_field_decoder("orderId"))
+}
+
+fn recorded_event_message_with_content_type(
+  id id: String,
+  stream stream_name: String,
+  revision revision: Int,
+  event_type event_type: String,
+  data data: BitArray,
+  content_type content_type: String,
+) -> BitArray {
+  protobuf.encode_message([
+    protobuf.encode_message_field(1, protobuf.encode_uuid(id)),
+    protobuf.encode_message_field(
+      2,
+      protobuf.encode_stream_identifier(protobuf.stream_identifier(stream_name)),
+    ),
+    protobuf.encode_uint64_field(3, revision),
+    protobuf.encode_uint64_field(4, 42),
+    protobuf.encode_uint64_field(5, 43),
+    metadata_entry("type", event_type),
+    metadata_entry("content-type", content_type),
+    protobuf.encode_bytes(8, data),
+  ])
+}
+
 fn recorded_event_message(
   id id: String,
   stream stream_name: String,
@@ -635,6 +776,61 @@ fn recorded_event_message(
     metadata_entry("content-type", "application/json"),
     protobuf.encode_bytes(8, data),
   ])
+}
+
+fn read_event_good_message() -> BitArray {
+  protobuf.encode_message([
+    protobuf.encode_message_field(
+      1,
+      protobuf.encode_message([
+        protobuf.encode_message_field(
+          1,
+          recorded_event_message(
+            id: "00000000-0000-4000-8000-000000000100",
+            stream: "orders",
+            revision: 7,
+            event_type: "order-created",
+            data: <<"{\"orderId\":\"1\"}">>,
+          ),
+        ),
+      ]),
+    ),
+  ])
+}
+
+fn read_event_resolved_message() -> BitArray {
+  protobuf.encode_message([
+    protobuf.encode_message_field(
+      1,
+      protobuf.encode_message([
+        protobuf.encode_message_field(
+          1,
+          recorded_event_message(
+            id: "00000000-0000-4000-8000-000000000101",
+            stream: "orders",
+            revision: 7,
+            event_type: "order-created",
+            data: <<"{\"orderId\":\"1\"}">>,
+          ),
+        ),
+        protobuf.encode_message_field(
+          2,
+          recorded_event_message(
+            id: "00000000-0000-4000-8000-000000000102",
+            stream: "$ce-order",
+            revision: 3,
+            event_type: "$>",
+            data: <<"7@orders">>,
+          ),
+        ),
+      ]),
+    ),
+  ])
+}
+
+fn json_field_decoder(field: String) -> decode.Decoder(String) {
+  use value <- decode.field(field, decode.string)
+  decode.success(value)
 }
 
 fn metadata_entry(key: String, value: String) -> BitArray {

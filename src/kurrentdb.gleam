@@ -11,6 +11,16 @@
 ////     functions: ["binary_event", "json_event", "metadata"]
 ////   },
 ////   {
+////     header: "Event Accessors",
+////     functions: [
+////       "binary_data",
+////       "content_type",
+////       "event_type",
+////       "json_data",
+////       "read_event_to_recorded",
+////     ]
+////   },
+////   {
 ////     header: "Append",
 ////     functions: [
 ////       "append_to_stream",
@@ -50,12 +60,12 @@
 ////     header: "Read All",
 ////     functions: [
 ////       "default_read_all_options",
-////       "read_all",
+////       "read_all_events",
 ////       "read_all_direction",
 ////       "read_all_filter",
 ////       "read_all_from_position",
 ////       "read_all_max_count",
-////       "read_all_messages",
+////       "read_all",
 ////       "read_all_resolve_links"
 ////     ]
 ////   },
@@ -113,6 +123,39 @@
 ////       "acl_read_roles",
 ////       "acl_write_roles",
 ////       "stream_acl"
+////     ]
+////   },
+////   {
+////     header: "Builders",
+////     functions: [
+////       "append_request",
+////       "delete_stream_request",
+////       "get_stream_metadata_request",
+////       "read_all_request",
+////       "read_stream_request",
+////       "set_stream_metadata_request",
+////       "subscribe_to_all_request",
+////       "subscribe_to_stream_request",
+////       "tombstone_stream_request"
+////     ]
+////   },
+////   {
+////     header: "Decoders",
+////     functions: [
+////       "decode_append_to_stream_response",
+////       "decode_delete_stream_response",
+////       "decode_read_stream_message",
+////       "decode_stream_metadata",
+////       "decode_tombstone_stream_response"
+////     ]
+////   },
+////   {
+////     header: "Helpers",
+////     functions: [
+////       "event_to_bitarray",
+////       "metadata_stream_name",
+////       "read_events_from_messages",
+////       "stream_metadata_to_json"
 ////     ]
 ////   }
 //// ]
@@ -188,21 +231,25 @@ const json_content_type: String = "application/json"
 
 const binary_content_type: String = "application/octet-stream"
 
+/// KurrentDB server connection. Created via `new` or `from_connection_string`.
 pub type Client {
   Client(endpoint: String, tls: Bool)
 }
 
+/// Errors from decoding gRPC wire frames.
 pub type FrameError {
   IncompleteHeader
   CompressedMessage
   IncompleteMessage(expected_bytes: Int)
 }
 
+/// Errors from decoding protocol buffer messages.
 pub type ProtobufDecodeError {
   DecodeError(expected: String, found: String, path: List(String))
   FieldNotFound(field_number: Int)
 }
 
+/// Domain errors returned by KurrentDB operations.
 pub type Error {
   HttpStatus(Int)
   GrpcStatus(String)
@@ -222,13 +269,16 @@ pub type Error {
   NotLeader(String)
   UnableToBuildRequest
   StreamFinished
+  JsonDecodeError(json.DecodeError)
 }
 
+/// Wraps transport errors and KurrentDB domain errors into a single result type.
 pub type OperationError(send_error) {
   SendError(send_error)
   KurrentdbError(Error)
 }
 
+/// Sans-IO transport abstraction. Backends provide open/receive/close.
 pub type ReadTransport(stream, transport_error) {
   ReadTransport(
     open: fn(http_request.Request(BitArray)) -> Result(stream, transport_error),
@@ -238,11 +288,13 @@ pub type ReadTransport(stream, transport_error) {
   )
 }
 
+/// Raw data or stream-finished signal from a `ReadTransport`.
 pub type ReadTransportMessage {
   ReadTransportMessage(BitArray)
   ReadTransportFinished
 }
 
+/// An active subscription returned by `subscribe_to_stream` or `subscribe_to_all`.
 pub type Subscription(stream, transport_error) {
   Subscription(
     stream: stream,
@@ -250,6 +302,7 @@ pub type Subscription(stream, transport_error) {
   )
 }
 
+/// Expected stream revision for concurrency control.
 pub type ExpectedRevision {
   Revision(Int)
   NoStream
@@ -257,41 +310,50 @@ pub type ExpectedRevision {
   StreamExists
 }
 
+/// Options for `append_to_stream`.
 pub type AppendOptions {
   AppendOptions(expected_revision: ExpectedRevision)
 }
 
+/// Options for `delete_stream`.
 pub type DeleteOptions {
   DeleteOptions(expected_revision: ExpectedRevision)
 }
 
+/// Options for `tombstone_stream`.
 pub type TombstoneOptions {
   TombstoneOptions(expected_revision: ExpectedRevision)
 }
 
+/// Result of a successful append.
 pub type Append {
   AppendSuccess(current_revision: Int, position: Position)
 }
 
+/// Result of a successful delete.
 pub type Delete {
   DeleteSuccess(position: Position)
 }
 
+/// Result of a successful tombstone.
 pub type Tombstone {
   TombstoneSuccess(position: Position)
 }
 
+/// Read direction: forwards or backwards.
 pub type Direction {
   Forwards
   Backwards
 }
 
+/// Starting point for reading a stream.
 pub type ReadRevision {
   FromStart
   FromEnd
   FromRevision(Int)
 }
 
+/// Options for `read_stream_events` and `read_stream_messages`.
 pub type ReadStreamOptions {
   ReadStreamOptions(
     direction: Direction,
@@ -301,6 +363,7 @@ pub type ReadStreamOptions {
   )
 }
 
+/// Options for `subscribe_to_stream`.
 pub type SubscribeToStreamOptions {
   SubscribeToStreamOptions(
     direction: Direction,
@@ -309,6 +372,7 @@ pub type SubscribeToStreamOptions {
   )
 }
 
+/// Options for `subscribe_to_all`.
 pub type SubscribeToAllOptions {
   SubscribeToAllOptions(
     direction: Direction,
@@ -318,12 +382,14 @@ pub type SubscribeToAllOptions {
   )
 }
 
+/// Starting position when reading or subscribing to `$all`.
 pub type ReadAllPosition {
   ReadAllFromStart
   ReadAllFromEnd
   ReadAllFromPosition(commit_position: Int, prepare_position: Int)
 }
 
+/// Options for `read_all_events` and `read_all`.
 pub type ReadAllOptions {
   ReadAllOptions(
     direction: Direction,
@@ -334,6 +400,7 @@ pub type ReadAllOptions {
   )
 }
 
+/// Filter for server-side event filtering on `$all`.
 pub type ReadAllFilter {
   NoFilter
   EventTypePrefix(prefixes: List(String), window: FilterWindow)
@@ -342,15 +409,18 @@ pub type ReadAllFilter {
   StreamNameRegex(regex: String, window: FilterWindow)
 }
 
+/// Window size strategy for filter results.
 pub type FilterWindow {
   FilterMax(Int)
   FilterCount
 }
 
+/// Options for `set_stream_metadata`.
 pub type SetStreamMetadataOptions {
   SetStreamMetadataOptions(expected_revision: ExpectedRevision)
 }
 
+/// Stream metadata: system fields and custom key-value pairs.
 pub type StreamMetadata {
   StreamMetadata(
     max_count: Option(Int),
@@ -362,6 +432,7 @@ pub type StreamMetadata {
   )
 }
 
+/// ACL roles for stream access control.
 pub type StreamAcl {
   StreamAcl(
     read_roles: List(String),
@@ -372,6 +443,7 @@ pub type StreamAcl {
   )
 }
 
+/// A single message from a read or subscription stream.
 pub type ReadMessage {
   ReadEvent(ReadEvent)
   SubscriptionConfirmed(String)
@@ -384,17 +456,20 @@ pub type ReadMessage {
   ReadIgnored
 }
 
+/// An event that was either recorded directly or resolved through a link.
 pub type ReadEvent {
   Recorded(RecordedEvent)
   Resolved(link: RecordedEvent, event: RecordedEvent)
 }
 
+/// Checkpoint within a subscription stream.
 pub type SubscriptionCheckpoint {
   NoSubscriptionCheckpoint
   StreamRevisionCheckpoint(Int)
   AllPositionCheckpoint(Position)
 }
 
+/// A stored event with its metadata and data.
 pub type RecordedEvent {
   RecordedEvent(
     id: String,
@@ -408,15 +483,20 @@ pub type RecordedEvent {
   )
 }
 
+/// A position in the KurrentDB transaction log.
 pub type Position {
   NoPositionReturned
   Position(commit_position: Int, prepare_position: Int)
 }
 
+/// Construct a `Client` with TLS enabled.
 pub fn new(endpoint: String) -> Client {
   Client(endpoint: endpoint, tls: True)
 }
 
+/// Construct a `Client` from a connection string.
+///
+/// The connection string format is `kurrentdb://host:port?tls=true|false`.
 pub fn from_connection_string(
   connection_string: String,
 ) -> Result(Client, connection.Error) {
@@ -424,10 +504,12 @@ pub fn from_connection_string(
   Ok(Client(endpoint: config.endpoint, tls: config.tls))
 }
 
+/// Default append options with expected revision set to `Any`.
 pub fn default_append_options() -> AppendOptions {
   AppendOptions(expected_revision: Any)
 }
 
+/// Set the expected revision on append options.
 pub fn expected_revision(
   _options: AppendOptions,
   expected_revision: ExpectedRevision,
@@ -435,10 +517,12 @@ pub fn expected_revision(
   AppendOptions(expected_revision: expected_revision)
 }
 
+/// Default delete options with expected revision set to `Any`.
 pub fn default_delete_options() -> DeleteOptions {
   DeleteOptions(expected_revision: Any)
 }
 
+/// Set the expected revision on delete options.
 pub fn delete_expected_revision(
   _options: DeleteOptions,
   expected_revision: ExpectedRevision,
@@ -446,10 +530,12 @@ pub fn delete_expected_revision(
   DeleteOptions(expected_revision: expected_revision)
 }
 
+/// Default tombstone options with expected revision set to `Any`.
 pub fn default_tombstone_options() -> TombstoneOptions {
   TombstoneOptions(expected_revision: Any)
 }
 
+/// Set the expected revision on tombstone options.
 pub fn tombstone_expected_revision(
   _options: TombstoneOptions,
   expected_revision: ExpectedRevision,
@@ -457,6 +543,7 @@ pub fn tombstone_expected_revision(
   TombstoneOptions(expected_revision: expected_revision)
 }
 
+/// Default read-stream options: forwards, from start, max 1000, no link resolution.
 pub fn default_read_stream_options() -> ReadStreamOptions {
   ReadStreamOptions(
     direction: Forwards,
@@ -466,6 +553,7 @@ pub fn default_read_stream_options() -> ReadStreamOptions {
   )
 }
 
+/// Set the read direction for a stream read.
 pub fn read_stream_read_direction(
   options: ReadStreamOptions,
   direction: Direction,
@@ -473,6 +561,7 @@ pub fn read_stream_read_direction(
   ReadStreamOptions(..options, direction: direction)
 }
 
+/// Set the revision to start reading from.
 pub fn read_stream_from_revision(
   options: ReadStreamOptions,
   revision: ReadRevision,
@@ -480,6 +569,7 @@ pub fn read_stream_from_revision(
   ReadStreamOptions(..options, from_revision: revision)
 }
 
+/// Set the maximum number of events to read.
 pub fn read_stream_max_count(
   options: ReadStreamOptions,
   max_count: Int,
@@ -487,6 +577,7 @@ pub fn read_stream_max_count(
   ReadStreamOptions(..options, max_count: max_count)
 }
 
+/// Enable or disable link-to-event resolution.
 pub fn read_stream_resolve_links(
   options: ReadStreamOptions,
   resolve_links: Bool,
@@ -494,6 +585,7 @@ pub fn read_stream_resolve_links(
   ReadStreamOptions(..options, resolve_links: resolve_links)
 }
 
+/// Default subscribe-to-stream options: forwards, from end, no link resolution.
 pub fn default_subscribe_to_stream_options() -> SubscribeToStreamOptions {
   SubscribeToStreamOptions(
     direction: Forwards,
@@ -502,6 +594,7 @@ pub fn default_subscribe_to_stream_options() -> SubscribeToStreamOptions {
   )
 }
 
+/// Set the read direction for a subscription.
 pub fn subscribe_to_stream_read_direction(
   options: SubscribeToStreamOptions,
   direction: Direction,
@@ -509,6 +602,7 @@ pub fn subscribe_to_stream_read_direction(
   SubscribeToStreamOptions(..options, direction: direction)
 }
 
+/// Set the revision to subscribe from.
 pub fn subscribe_to_stream_from_revision(
   options: SubscribeToStreamOptions,
   revision: ReadRevision,
@@ -516,6 +610,7 @@ pub fn subscribe_to_stream_from_revision(
   SubscribeToStreamOptions(..options, from_revision: revision)
 }
 
+/// Enable or disable link resolution for a subscription.
 pub fn subscribe_to_stream_resolve_links(
   options: SubscribeToStreamOptions,
   resolve_links: Bool,
@@ -523,6 +618,7 @@ pub fn subscribe_to_stream_resolve_links(
   SubscribeToStreamOptions(..options, resolve_links: resolve_links)
 }
 
+/// Default subscribe-to-all options: forwards, from end, no filter, no link resolution.
 pub fn default_subscribe_to_all_options() -> SubscribeToAllOptions {
   SubscribeToAllOptions(
     direction: Forwards,
@@ -532,6 +628,7 @@ pub fn default_subscribe_to_all_options() -> SubscribeToAllOptions {
   )
 }
 
+/// Set the read direction for a subscription to `$all`.
 pub fn subscribe_to_all_direction(
   options: SubscribeToAllOptions,
   direction: Direction,
@@ -539,6 +636,7 @@ pub fn subscribe_to_all_direction(
   SubscribeToAllOptions(..options, direction: direction)
 }
 
+/// Set the starting position for a subscription to `$all`.
 pub fn subscribe_to_all_from_position(
   options: SubscribeToAllOptions,
   position: ReadAllPosition,
@@ -546,6 +644,7 @@ pub fn subscribe_to_all_from_position(
   SubscribeToAllOptions(..options, from_position: position)
 }
 
+/// Enable or disable link resolution for a subscription to `$all`.
 pub fn subscribe_to_all_resolve_links(
   options: SubscribeToAllOptions,
   resolve_links: Bool,
@@ -553,6 +652,7 @@ pub fn subscribe_to_all_resolve_links(
   SubscribeToAllOptions(..options, resolve_links: resolve_links)
 }
 
+/// Set the server-side filter for a subscription to `$all`.
 pub fn subscribe_to_all_filter(
   options: SubscribeToAllOptions,
   filter: ReadAllFilter,
@@ -560,6 +660,7 @@ pub fn subscribe_to_all_filter(
   SubscribeToAllOptions(..options, filter: filter)
 }
 
+/// Default read-all options: forwards, from start, max 1000, no filter, no link resolution.
 pub fn default_read_all_options() -> ReadAllOptions {
   ReadAllOptions(
     direction: Forwards,
@@ -570,6 +671,7 @@ pub fn default_read_all_options() -> ReadAllOptions {
   )
 }
 
+/// Set the read direction for reading `$all`.
 pub fn read_all_direction(
   options: ReadAllOptions,
   direction: Direction,
@@ -577,6 +679,7 @@ pub fn read_all_direction(
   ReadAllOptions(..options, direction: direction)
 }
 
+/// Set the starting position for reading `$all`.
 pub fn read_all_from_position(
   options: ReadAllOptions,
   position: ReadAllPosition,
@@ -584,6 +687,7 @@ pub fn read_all_from_position(
   ReadAllOptions(..options, from_position: position)
 }
 
+/// Set the maximum number of events to read from `$all`.
 pub fn read_all_max_count(
   options: ReadAllOptions,
   max_count: Int,
@@ -591,6 +695,7 @@ pub fn read_all_max_count(
   ReadAllOptions(..options, max_count: max_count)
 }
 
+/// Enable or disable link resolution when reading `$all`.
 pub fn read_all_resolve_links(
   options: ReadAllOptions,
   resolve_links: Bool,
@@ -598,6 +703,7 @@ pub fn read_all_resolve_links(
   ReadAllOptions(..options, resolve_links: resolve_links)
 }
 
+/// Set the server-side filter when reading `$all`.
 pub fn read_all_filter(
   options: ReadAllOptions,
   filter: ReadAllFilter,
@@ -605,10 +711,12 @@ pub fn read_all_filter(
   ReadAllOptions(..options, filter: filter)
 }
 
+/// Default set-stream-metadata options with expected revision set to `Any`.
 pub fn default_set_stream_metadata_options() -> SetStreamMetadataOptions {
   SetStreamMetadataOptions(expected_revision: Any)
 }
 
+/// Set the expected revision on stream metadata options.
 pub fn metadata_expected_revision(
   _options: SetStreamMetadataOptions,
   expected_revision: ExpectedRevision,
@@ -616,6 +724,7 @@ pub fn metadata_expected_revision(
   SetStreamMetadataOptions(expected_revision: expected_revision)
 }
 
+/// Construct a `StreamMetadata` with all system fields absent.
 pub fn stream_metadata() -> StreamMetadata {
   StreamMetadata(
     max_count: None,
@@ -627,6 +736,7 @@ pub fn stream_metadata() -> StreamMetadata {
   )
 }
 
+/// Set `$maxCount` on stream metadata.
 pub fn metadata_max_count(
   metadata: StreamMetadata,
   max_count: Int,
@@ -634,6 +744,7 @@ pub fn metadata_max_count(
   StreamMetadata(..metadata, max_count: Some(max_count))
 }
 
+/// Set `$maxAge` (in seconds) on stream metadata.
 pub fn metadata_max_age(
   metadata: StreamMetadata,
   max_age: Int,
@@ -641,6 +752,7 @@ pub fn metadata_max_age(
   StreamMetadata(..metadata, max_age: Some(max_age))
 }
 
+/// Set `$tb` (truncate before) revision on stream metadata.
 pub fn metadata_truncate_before(
   metadata: StreamMetadata,
   truncate_before: Int,
@@ -648,6 +760,7 @@ pub fn metadata_truncate_before(
   StreamMetadata(..metadata, truncate_before: Some(truncate_before))
 }
 
+/// Set `$cacheControl` (in seconds) on stream metadata.
 pub fn metadata_cache_control(
   metadata: StreamMetadata,
   cache_control: Int,
@@ -655,6 +768,7 @@ pub fn metadata_cache_control(
   StreamMetadata(..metadata, cache_control: Some(cache_control))
 }
 
+/// Set the ACL on stream metadata.
 pub fn metadata_acl(
   metadata: StreamMetadata,
   acl: StreamAcl,
@@ -662,6 +776,7 @@ pub fn metadata_acl(
   StreamMetadata(..metadata, acl: Some(acl))
 }
 
+/// Add a custom key-value field to stream metadata.
 pub fn metadata_custom(
   metadata: StreamMetadata,
   key: String,
@@ -670,6 +785,7 @@ pub fn metadata_custom(
   StreamMetadata(..metadata, custom: [#(key, value), ..metadata.custom])
 }
 
+/// Construct an empty `StreamAcl` with no roles set.
 pub fn stream_acl() -> StreamAcl {
   StreamAcl(
     read_roles: [],
@@ -680,26 +796,32 @@ pub fn stream_acl() -> StreamAcl {
   )
 }
 
+/// Set the read roles on an ACL.
 pub fn acl_read_roles(acl: StreamAcl, roles: List(String)) -> StreamAcl {
   StreamAcl(..acl, read_roles: roles)
 }
 
+/// Set the write roles on an ACL.
 pub fn acl_write_roles(acl: StreamAcl, roles: List(String)) -> StreamAcl {
   StreamAcl(..acl, write_roles: roles)
 }
 
+/// Set the delete roles on an ACL.
 pub fn acl_delete_roles(acl: StreamAcl, roles: List(String)) -> StreamAcl {
   StreamAcl(..acl, delete_roles: roles)
 }
 
+/// Set the metadata-read roles on an ACL.
 pub fn acl_meta_read_roles(acl: StreamAcl, roles: List(String)) -> StreamAcl {
   StreamAcl(..acl, meta_read_roles: roles)
 }
 
+/// Set the metadata-write roles on an ACL.
 pub fn acl_meta_write_roles(acl: StreamAcl, roles: List(String)) -> StreamAcl {
   StreamAcl(..acl, meta_write_roles: roles)
 }
 
+/// Append events to a stream. Requires a `send` function from the transport backend.
 pub fn append_to_stream(
   client: Client,
   stream stream: String,
@@ -709,7 +831,7 @@ pub fn append_to_stream(
     Result(response.Response(BitArray), send_error),
 ) -> Result(Append, OperationError(send_error)) {
   use request <- result.try(
-    build_append_to_stream_request(client, stream:, events:, options:)
+    append_request(client, stream:, events:, options:)
     |> result.replace_error(KurrentdbError(UnableToBuildRequest)),
   )
 
@@ -719,7 +841,7 @@ pub fn append_to_stream(
   |> result.map_error(KurrentdbError)
 }
 
-fn build_append_to_stream_request(
+pub fn append_request(
   client: Client,
   stream stream: String,
   events events: List(Event),
@@ -741,6 +863,7 @@ fn build_append_to_stream_request(
   )
 }
 
+/// Read events from a stream, returning only `ReadEvent` variants.
 pub fn read_stream_events(
   client: Client,
   stream stream_name: String,
@@ -759,6 +882,7 @@ pub fn read_stream_events(
   read_events_from_messages(messages)
 }
 
+/// Read all messages from a stream, including checkpoints and subscription lifecycle signals.
 pub fn read_stream_messages(
   client: Client,
   stream stream: String,
@@ -767,7 +891,7 @@ pub fn read_stream_messages(
   within timeout: Int,
 ) -> Result(List(ReadMessage), OperationError(transport_error)) {
   use request <- result.try(
-    build_read_stream_request(client, stream:, options:)
+    read_stream_request(client, stream:, options:)
     |> result.map_error(fn(_) { KurrentdbError(UnableToBuildRequest) }),
   )
 
@@ -778,7 +902,7 @@ pub fn read_stream_messages(
   collect_read_messages(read_stream, transport, timeout, [])
 }
 
-fn build_read_stream_request(
+pub fn read_stream_request(
   client: Client,
   stream stream_name: String,
   options options: ReadStreamOptions,
@@ -800,6 +924,10 @@ fn build_read_stream_request(
   )
 }
 
+/// Subscribe to a single stream, returning an active `Subscription`.
+///
+/// The subscription is ready to use immediately. Call `receive_subscription_message`
+/// or `receive_subscription_event` to consume the first message.
 pub fn subscribe_to_stream(
   client: Client,
   stream stream_name: String,
@@ -810,7 +938,7 @@ pub fn subscribe_to_stream(
   OperationError(transport_error),
 ) {
   use request <- result.try(
-    build_subscribe_to_stream_request(client, stream: stream_name, options:)
+    subscribe_to_stream_request(client, stream: stream_name, options:)
     |> result.replace_error(KurrentdbError(UnableToBuildRequest)),
   )
   use read_stream <- result.try(
@@ -819,7 +947,7 @@ pub fn subscribe_to_stream(
   Ok(Subscription(stream: read_stream, transport:))
 }
 
-fn build_subscribe_to_stream_request(
+pub fn subscribe_to_stream_request(
   client: Client,
   stream stream_name: String,
   options options: SubscribeToStreamOptions,
@@ -840,6 +968,9 @@ fn build_subscribe_to_stream_request(
   )
 }
 
+/// Subscribe to `$all`, returning an active `Subscription`.
+///
+/// Use `receive_subscription_message` or `receive_subscription_event` to consume messages.
 pub fn subscribe_to_all(
   client: Client,
   options options: SubscribeToAllOptions,
@@ -849,7 +980,7 @@ pub fn subscribe_to_all(
   OperationError(transport_error),
 ) {
   use request <- result.try(
-    build_subscribe_to_all_request(client, options:)
+    subscribe_to_all_request(client, options:)
     |> result.map_error(fn(_) { KurrentdbError(UnableToBuildRequest) }),
   )
   use read_stream <- result.try(
@@ -858,7 +989,7 @@ pub fn subscribe_to_all(
   Ok(Subscription(stream: read_stream, transport: transport))
 }
 
-fn build_subscribe_to_all_request(
+pub fn subscribe_to_all_request(
   client: Client,
   options options: SubscribeToAllOptions,
 ) -> Result(http_request.Request(BitArray), Nil) {
@@ -878,6 +1009,7 @@ fn build_subscribe_to_all_request(
   )
 }
 
+/// Soft-delete a stream. Requires a `send` function from the transport backend.
 pub fn delete_stream(
   client: Client,
   stream stream_name: String,
@@ -886,7 +1018,7 @@ pub fn delete_stream(
     Result(response.Response(BitArray), send_error),
 ) -> Result(Delete, OperationError(send_error)) {
   use request <- result.try(
-    build_delete_stream_request(client, stream: stream_name, options:)
+    delete_stream_request(client, stream: stream_name, options:)
     |> result.map_error(fn(_) { KurrentdbError(UnableToBuildRequest) }),
   )
   use response <- result.try(send(request) |> result.map_error(SendError))
@@ -894,7 +1026,7 @@ pub fn delete_stream(
   |> result.map_error(KurrentdbError)
 }
 
-fn build_delete_stream_request(
+pub fn delete_stream_request(
   client: Client,
   stream stream_name: String,
   options options: DeleteOptions,
@@ -913,6 +1045,7 @@ fn build_delete_stream_request(
   )
 }
 
+/// Permanently delete a stream (tombstone). Requires a `send` function.
 pub fn tombstone_stream(
   client: Client,
   stream stream_name: String,
@@ -921,7 +1054,7 @@ pub fn tombstone_stream(
     Result(response.Response(BitArray), send_error),
 ) -> Result(Tombstone, OperationError(send_error)) {
   use request <- result.try(
-    build_tombstone_stream_request(client, stream: stream_name, options:)
+    tombstone_stream_request(client, stream: stream_name, options:)
     |> result.map_error(fn(_) { KurrentdbError(UnableToBuildRequest) }),
   )
   use response <- result.try(send(request) |> result.map_error(SendError))
@@ -929,7 +1062,7 @@ pub fn tombstone_stream(
   |> result.map_error(KurrentdbError)
 }
 
-fn build_tombstone_stream_request(
+pub fn tombstone_stream_request(
   client: Client,
   stream stream_name: String,
   options options: TombstoneOptions,
@@ -948,6 +1081,9 @@ fn build_tombstone_stream_request(
   )
 }
 
+/// Set stream metadata by writing a `$metadata` event. Requires a `send` function.
+///
+/// The `id` is a caller-supplied UUID string.
 pub fn set_stream_metadata(
   client: Client,
   stream stream_name: String,
@@ -974,6 +1110,7 @@ pub fn set_stream_metadata(
   )
 }
 
+/// Read stream metadata from the `$$<stream>` metadata stream.
 pub fn get_stream_metadata(
   client: Client,
   stream stream_name: String,
@@ -981,7 +1118,7 @@ pub fn get_stream_metadata(
   within timeout: Int,
 ) -> Result(StreamMetadata, OperationError(transport_error)) {
   use request <- result.try(
-    build_get_stream_metadata_request(client, stream: stream_name)
+    get_stream_metadata_request(client, stream: stream_name)
     |> result.map_error(fn(_) { KurrentdbError(UnableToBuildRequest) }),
   )
   use read_stream <- result.try(
@@ -998,11 +1135,11 @@ pub fn get_stream_metadata(
   }
 }
 
-fn build_get_stream_metadata_request(
+pub fn get_stream_metadata_request(
   client: Client,
   stream stream_name: String,
 ) -> Result(http_request.Request(BitArray), Nil) {
-  build_read_stream_request(
+  read_stream_request(
     client,
     stream: metadata_stream_name(stream_name),
     options: default_read_stream_options()
@@ -1012,19 +1149,20 @@ fn build_get_stream_metadata_request(
   )
 }
 
-@internal
+/// Decode stream metadata from JSON bytes.
 pub fn decode_stream_metadata(data: BitArray) -> Result(StreamMetadata, Error) {
   json.parse_bits(data, stream_metadata_decoder())
   |> result.map_error(UnableToDecodeStreamMetadata)
 }
 
-pub fn read_all(
+/// Read events from `$all`, returning only `ReadEvent` variants.
+pub fn read_all_events(
   client: Client,
   options options: ReadAllOptions,
   using transport: ReadTransport(stream, transport_error),
   within timeout: Int,
 ) -> Result(List(ReadEvent), OperationError(transport_error)) {
-  use messages <- result.try(read_all_messages(
+  use messages <- result.try(read_all(
     client,
     options:,
     using: transport,
@@ -1033,14 +1171,15 @@ pub fn read_all(
   Ok(read_events_from_messages(messages))
 }
 
-pub fn read_all_messages(
+/// Read all messages from `$all`, including checkpoints.
+pub fn read_all(
   client: Client,
   options options: ReadAllOptions,
   using transport: ReadTransport(stream, transport_error),
   within timeout: Int,
 ) -> Result(List(ReadMessage), OperationError(transport_error)) {
   use request <- result.try(
-    build_read_all_request(client, options:)
+    read_all_request(client, options:)
     |> result.map_error(fn(_) { KurrentdbError(UnableToBuildRequest) }),
   )
   use read_stream <- result.try(
@@ -1049,7 +1188,7 @@ pub fn read_all_messages(
   collect_read_messages(read_stream, transport, timeout, [])
 }
 
-fn build_read_all_request(
+pub fn read_all_request(
   client: Client,
   options options: ReadAllOptions,
 ) -> Result(http_request.Request(BitArray), Nil) {
@@ -1070,7 +1209,8 @@ fn build_read_all_request(
   )
 }
 
-fn read_all_position_to_proto(
+/// Convert a `ReadAllPosition` to its protobuf representation.
+pub fn read_all_position_to_proto(
   position: ReadAllPosition,
 ) -> stream.ReadAllPosition {
   case position {
@@ -1081,7 +1221,8 @@ fn read_all_position_to_proto(
   }
 }
 
-fn read_all_filter_to_proto(filter: ReadAllFilter) -> stream.ReadAllFilter {
+/// Convert a `ReadAllFilter` to its protobuf representation.
+pub fn read_all_filter_to_proto(filter: ReadAllFilter) -> stream.ReadAllFilter {
   case filter {
     NoFilter -> stream.NoFilter
     EventTypePrefix(prefixes, window) ->
@@ -1095,14 +1236,16 @@ fn read_all_filter_to_proto(filter: ReadAllFilter) -> stream.ReadAllFilter {
   }
 }
 
-fn filter_window_to_proto(window: FilterWindow) -> stream.FilterWindow {
+/// Convert a `FilterWindow` to its protobuf representation.
+pub fn filter_window_to_proto(window: FilterWindow) -> stream.FilterWindow {
   case window {
     FilterMax(max) -> stream.FilterMax(max)
     FilterCount -> stream.FilterCount
   }
 }
 
-fn metadata_stream_name(stream_name: String) -> String {
+/// Return the metadata stream name for a given stream (`$$<stream>`).
+pub fn metadata_stream_name(stream_name: String) -> String {
   "$$" <> stream_name
 }
 
@@ -1171,7 +1314,7 @@ fn stream_acl_decoder() -> decode.Decoder(StreamAcl) {
   ))
 }
 
-fn stream_metadata_to_json(metadata: StreamMetadata) -> Json {
+pub fn stream_metadata_to_json(metadata: StreamMetadata) -> Json {
   json.object(list.append(system_metadata_fields(metadata), metadata.custom))
 }
 
@@ -1227,14 +1370,16 @@ fn prepend_roles(
   }
 }
 
-fn read_direction_to_proto(direction: Direction) -> stream.ReadDirection {
+/// Convert a `Direction` to its protobuf representation.
+pub fn read_direction_to_proto(direction: Direction) -> stream.ReadDirection {
   case direction {
     Forwards -> stream.Forwards
     Backwards -> stream.Backwards
   }
 }
 
-fn read_revision_to_proto(revision: ReadRevision) -> stream.ReadRevision {
+/// Convert a `ReadRevision` to its protobuf representation.
+pub fn read_revision_to_proto(revision: ReadRevision) -> stream.ReadRevision {
   case revision {
     FromStart -> stream.ReadStart
     FromEnd -> stream.ReadEnd
@@ -1242,7 +1387,8 @@ fn read_revision_to_proto(revision: ReadRevision) -> stream.ReadRevision {
   }
 }
 
-fn expected_revision_to_proto(
+/// Convert an `ExpectedRevision` to its protobuf representation.
+pub fn expected_revision_to_proto(
   expected_revision: ExpectedRevision,
 ) -> stream.ExpectedRevision {
   case expected_revision {
@@ -1253,7 +1399,7 @@ fn expected_revision_to_proto(
   }
 }
 
-@internal
+/// Decode an append response from a gRPC response.
 pub fn decode_append_to_stream_response(
   response: response.Response(BitArray),
 ) -> Result(Append, Error) {
@@ -1278,7 +1424,7 @@ fn protobuf_decode_errors_to_errors(errors: List(protobuf.DecodeError)) {
   }
 }
 
-@internal
+/// Decode a delete response from a gRPC response.
 pub fn decode_delete_stream_response(
   response: response.Response(BitArray),
 ) -> Result(Delete, Error) {
@@ -1294,7 +1440,7 @@ pub fn decode_delete_stream_response(
   }
 }
 
-@internal
+/// Decode a tombstone response from a gRPC response.
 pub fn decode_tombstone_stream_response(
   response: response.Response(BitArray),
 ) -> Result(Tombstone, Error) {
@@ -1310,7 +1456,7 @@ pub fn decode_tombstone_stream_response(
   }
 }
 
-@internal
+/// Decode a single read response message.
 pub fn decode_read_stream_message(
   message: BitArray,
 ) -> Result(ReadMessage, Error) {
@@ -1320,6 +1466,7 @@ pub fn decode_read_stream_message(
   |> result.try(map_read_result)
 }
 
+/// Receive the next message from a subscription, returning the updated subscription.
 pub fn receive_subscription_message(
   subscription: Subscription(stream, transport_error),
   within timeout: Int,
@@ -1344,6 +1491,7 @@ pub fn receive_subscription_message(
   }
 }
 
+/// Receive the next `ReadEvent` from a subscription, skipping other message types.
 pub fn receive_subscription_event(
   subscription: Subscription(stream, transport_error),
   within timeout: Int,
@@ -1369,6 +1517,7 @@ pub fn receive_subscription_event(
   }
 }
 
+/// Close a subscription and release its transport resources.
 pub fn close_subscription(
   subscription: Subscription(stream, transport_error),
 ) -> Nil {
@@ -1402,7 +1551,8 @@ fn collect_read_messages(
   }
 }
 
-fn read_events_from_messages(messages: List(ReadMessage)) -> List(ReadEvent) {
+/// Extract `ReadEvent` variants from a list of read messages, filtering out checkpoints and lifecycle signals.
+pub fn read_events_from_messages(messages: List(ReadMessage)) -> List(ReadEvent) {
   messages
   |> list.fold([], fn(events, message) {
     case message {
@@ -1425,7 +1575,7 @@ fn decode_response_messages(
 ) -> Result(List(BitArray), Error) {
   case response.status, list.key_find(response.headers, "grpc-status") {
     200, Ok("0") -> decode_grpc_body(response.body)
-    200, Ok(status) -> Error(grpc_error(response.headers, status))
+    200, Ok(status) -> Error(grpc_error_from_status(response.headers, status))
     200, Error(Nil) -> decode_grpc_body(response.body)
     status, _ -> Error(HttpStatus(status))
   }
@@ -1551,7 +1701,8 @@ fn stream_subscription_checkpoint_to_subscription_checkpoint(
   }
 }
 
-fn grpc_error(headers: List(#(String, String)), status: String) -> Error {
+/// Map a gRPC status code and response headers to a domain `Error`.
+pub fn grpc_error_from_status(headers: List(#(String, String)), status: String) -> Error {
   let message = get_grpc_message(headers)
   case status {
     "4" -> DeadlineExceeded
@@ -1579,6 +1730,7 @@ fn get_grpc_message(headers: List(#(String, String))) -> String {
   }
 }
 
+/// An event to be appended to a stream.
 pub type Event {
   Event(
     id: String,
@@ -1589,6 +1741,7 @@ pub type Event {
   )
 }
 
+/// Construct an `Event` with JSON-encoded data and `application/json` content type.
 pub fn json_event(
   uuid id: String,
   event_type type_: String,
@@ -1603,6 +1756,7 @@ pub fn json_event(
   )
 }
 
+/// Construct an `Event` with raw binary data and `application/octet-stream` content type.
 pub fn binary_event(
   uuid id: String,
   type_ type_: String,
@@ -1611,11 +1765,50 @@ pub fn binary_event(
   Event(id:, type_:, content_type: binary_content_type, data:, metadata: <<>>)
 }
 
+/// Attach custom metadata to an event.
 pub fn metadata(event: Event, metadata: BitArray) -> Event {
   Event(..event, metadata: metadata)
 }
 
-fn event_to_bitarray(event: Event) -> BitArray {
+fn read_event_to_recorded(event: ReadEvent) -> RecordedEvent {
+  case event {
+    Recorded(event) -> event
+    Resolved(event: event, ..) -> event
+  }
+}
+
+/// Extract the event type from a read event.
+pub fn event_type(event: ReadEvent) -> String {
+  case list.key_find(read_event_to_recorded(event).metadata, "type") {
+    Ok(type_) -> type_
+    Error(Nil) -> ""
+  }
+}
+
+/// Extract the content type from a read event.
+pub fn content_type(event: ReadEvent) -> String {
+  case list.key_find(read_event_to_recorded(event).metadata, "content-type") {
+    Ok(type_) -> type_
+    Error(Nil) -> ""
+  }
+}
+
+/// Decode the event data as JSON using the given decoder.
+pub fn json_data(
+  event: ReadEvent,
+  decoder: decode.Decoder(a),
+) -> Result(a, Error) {
+  json.parse_bits(read_event_to_recorded(event).data, decoder)
+  |> result.map_error(JsonDecodeError)
+}
+
+/// Return the raw binary data of a read event.
+pub fn binary_data(event: ReadEvent) -> BitArray {
+  read_event_to_recorded(event).data
+}
+
+/// Serialize an `Event` into a protobuf-encoded `ProposedMessage` bit array.
+pub fn event_to_bitarray(event: Event) -> BitArray {
   stream.ProposedMessage(
     uuid: event.id,
     metadata: [

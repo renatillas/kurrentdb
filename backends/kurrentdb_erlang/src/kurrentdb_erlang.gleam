@@ -14,8 +14,7 @@ import gleam/result
 import kurrentdb
 import kurrentdb/internal/grpc
 
-pub type FrameError
-
+/// Transport-level errors from the Erlang backend.
 pub type Error {
   StreamFailed(String)
   StreamTimeout
@@ -25,6 +24,7 @@ pub type Error {
   IncompleteMessage(expected_bytes: Int)
 }
 
+/// An opaque raw HTTP/2 stream managed by a `gleam_otp` actor.
 pub opaque type Stream {
   Stream(
     control: Subject(StreamActorMessage),
@@ -32,6 +32,7 @@ pub opaque type Stream {
   )
 }
 
+/// Message sent to the stream supervisor to start a new stream.
 pub opaque type StreamStart {
   StreamStart(
     request: Request(BitArray),
@@ -46,6 +47,7 @@ type StreamMessage {
   Finished
 }
 
+/// An opaque gRPC-level stream that wraps a raw HTTP/2 stream with a frame decoder.
 pub opaque type GrpcStream {
   GrpcStream(
     stream: Stream,
@@ -73,6 +75,7 @@ type StreamActorState {
   StreamActorState(worker: Pid, inbox: Subject(Result(StreamMessage, Error)))
 }
 
+/// Build a `send` function for unary gRPC calls through the named stream supervisor.
 pub fn send(
   name: process.Name(factory.Message(StreamStart, Stream)),
 ) -> fn(Request(BitArray)) -> Result(response.Response(BitArray), Error) {
@@ -82,6 +85,7 @@ pub fn send(
   }
 }
 
+/// Build a `ReadTransport` for streaming gRPC calls through the named stream supervisor.
 pub fn read_transport(
   name: process.Name(factory.Message(StreamStart, Stream)),
 ) -> kurrentdb.ReadTransport(GrpcStream, Error) {
@@ -92,6 +96,7 @@ pub fn read_transport(
   )
 }
 
+/// Start a stream supervisor process under the default `gleam_otp` actor system.
 pub fn start_stream(
   name: process.Name(factory.Message(StreamStart, Stream)),
 ) -> Result(actor.Started(factory.Supervisor(StreamStart, Stream)), Error) {
@@ -100,6 +105,7 @@ pub fn start_stream(
   |> result.map_error(start_error_to_error)
 }
 
+/// Build a child spec for the stream supervisor to use in a supervision tree.
 pub fn supervised_stream(
   name: process.Name(factory.Message(StreamStart, Stream)),
 ) -> supervision.ChildSpecification(factory.Supervisor(StreamStart, Stream)) {
