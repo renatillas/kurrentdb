@@ -7,8 +7,8 @@
 // All public functions return Gleam-compatible Result types using the
 // Gleam runtime's Result$Ok / Result$Error constructors.
 
-import { Result$Ok, Result$Error, BitArray$BitArray, List } from "../gleam.mjs";
-import { Option$Some, Option$None } from "../../gleam_stdlib/gleam/option.mjs";
+import { Result$Ok, Result$Error, BitArray$BitArray, List } from "../../gleam.mjs";
+import { Option$Some, Option$None } from "../../../gleam_stdlib/gleam/option.mjs";
 
 let http2 = null;
 let useHttp2 = false;

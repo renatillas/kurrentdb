@@ -1,17 +1,4 @@
-//// KurrentDB JavaScript backend.
-////
-//// Uses an HTTP/2-aware transport layer for gRPC communication with
-//// KurrentDB. All request construction and response decoding is delegated
-//// to the core `kurrentdb` package — no protobuf logic duplicated.
-////
-//// Unary operations (append, delete, tombstone, set_stream_metadata) build
-//// the request via core builders, send with `transport.send_request`,
-//// and decode with core decoders.
-////
-//// Streamed operations (read, subscribe) use `transport.open_stream` +
-//// `transport.read_chunk` with the core gRPC incremental frame decoder
-//// (`grpc.decode_frame_chunk`) and message decoder
-//// (`kurrentdb.decode_read_stream_message`).
+//// Javascript HTTP/2 transport for the sans-IO KurrentDB core package.
 
 import gleam/http/request as http_request
 import gleam/http/response as http_response
@@ -21,7 +8,7 @@ import gleam/option.{None, Some}
 import gleam/result
 import kurrentdb
 import kurrentdb/internal/grpc
-import kurrentdb_javascript/transport as transport
+import kurrentdb_javascript/internal/transport
 
 /// Errors combining transport and domain errors.
 pub type Error {
@@ -35,20 +22,13 @@ pub opaque type Subscription {
 }
 
 fn build_and_send(
-  build_result: Result(http_request.Request(BitArray), Nil),
+  request: http_request.Request(BitArray),
 ) -> Promise(Result(http_response.Response(BitArray), Error)) {
-  case build_result {
-    Error(_) ->
-      promise.resolve(Error(KurrentdbError(kurrentdb.UnableToBuildRequest)))
-    Ok(request) ->
-      transport.send_request(request)
-      |> promise.map(fn(result) { result |> result.map_error(TransportError) })
-  }
+  transport.send_request(request)
+  |> promise.map(fn(result) { result |> result.map_error(TransportError) })
 }
 
-fn grpc_frame_error_to_frame_error(
-  error: grpc.FrameError,
-) -> kurrentdb.FrameError {
+fn grpc_frame_error_to_frame_error(error: grpc.FrameError) -> kurrentdb.Error {
   case error {
     grpc.IncompleteHeader -> kurrentdb.IncompleteHeader
     grpc.CompressedMessage -> kurrentdb.CompressedMessage
@@ -78,11 +58,7 @@ fn collect_read_frames(
           Ok(Nil) -> collect_read_messages_from_frames(list.reverse(frames), [])
           Error(error) ->
             promise.resolve(
-              Error(
-                KurrentdbError(
-                  kurrentdb.FrameError(grpc_frame_error_to_frame_error(error)),
-                ),
-              ),
+              Error(KurrentdbError(grpc_frame_error_to_frame_error(error))),
             )
         }
       }
@@ -96,11 +72,7 @@ fn collect_read_frames(
             )
           Error(error) ->
             promise.resolve(
-              Error(
-                KurrentdbError(
-                  kurrentdb.FrameError(grpc_frame_error_to_frame_error(error)),
-                ),
-              ),
+              Error(KurrentdbError(grpc_frame_error_to_frame_error(error))),
             )
         }
       }
@@ -193,7 +165,7 @@ pub fn set_stream_metadata(
   stream stream_name: String,
   metadata metadata: kurrentdb.StreamMetadata,
   uuid id: String,
-  options options: kurrentdb.SetStreamMetadataOptions,
+  options options: kurrentdb.AppendOptions,
 ) -> Promise(Result(kurrentdb.Append, Error)) {
   let metadata_event =
     kurrentdb.json_event(
@@ -206,8 +178,7 @@ pub fn set_stream_metadata(
     client,
     stream: kurrentdb.metadata_stream_name(stream_name),
     events: [metadata_event],
-    options: kurrentdb.default_append_options()
-      |> kurrentdb.expected_revision(options.expected_revision),
+    options:,
   )
 }
 
@@ -229,11 +200,8 @@ pub fn read_stream_messages(
   stream stream_name: String,
   options options: kurrentdb.ReadStreamOptions,
 ) -> Promise(Result(List(kurrentdb.ReadMessage), Error)) {
-  case kurrentdb.read_stream_request(client, stream: stream_name, options:) {
-    Error(_) ->
-      promise.resolve(Error(KurrentdbError(kurrentdb.UnableToBuildRequest)))
-    Ok(request) -> open_stream_and_collect(request)
-  }
+  kurrentdb.read_stream_request(client, stream: stream_name, options:)
+  |> open_stream_and_collect
 }
 
 /// Read events from `$all`, returning only `ReadEvent` variants.
@@ -252,11 +220,8 @@ pub fn read_all(
   client: kurrentdb.Client,
   options options: kurrentdb.ReadAllOptions,
 ) -> Promise(Result(List(kurrentdb.ReadMessage), Error)) {
-  case kurrentdb.read_all_request(client, options:) {
-    Error(_) ->
-      promise.resolve(Error(KurrentdbError(kurrentdb.UnableToBuildRequest)))
-    Ok(request) -> open_stream_and_collect(request)
-  }
+  kurrentdb.read_all_request(client, options:)
+  |> open_stream_and_collect
 }
 
 /// Read stream metadata from the `$$<stream>` metadata stream.
@@ -264,21 +229,17 @@ pub fn get_stream_metadata(
   client: kurrentdb.Client,
   stream stream_name: String,
 ) -> Promise(Result(kurrentdb.StreamMetadata, Error)) {
-  case kurrentdb.get_stream_metadata_request(client, stream: stream_name) {
-    Error(_) ->
-      promise.resolve(Error(KurrentdbError(kurrentdb.UnableToBuildRequest)))
-    Ok(request) ->
-      open_stream_and_collect(request)
-      |> promise.map_try(fn(messages) {
-        case kurrentdb.read_events_from_messages(messages) {
-          [kurrentdb.Recorded(event), ..]
-          | [kurrentdb.Resolved(event: event, ..), ..] ->
-            kurrentdb.decode_stream_metadata(event.data)
-            |> result.map_error(KurrentdbError)
-          [] -> Error(KurrentdbError(kurrentdb.EmptyResponse))
-        }
-      })
-  }
+  kurrentdb.get_stream_metadata_request(client, stream: stream_name)
+  |> open_stream_and_collect
+  |> promise.map_try(fn(messages) {
+    case kurrentdb.read_events_from_messages(messages) {
+      [kurrentdb.Recorded(event), ..]
+      | [kurrentdb.Resolved(event: event, ..), ..] ->
+        kurrentdb.decode_stream_metadata(event.data)
+        |> result.map_error(KurrentdbError)
+      [] -> Error(KurrentdbError(kurrentdb.EmptyResponse))
+    }
+  })
 }
 
 /// Subscribe to a single stream, returning an active `Subscription`.
@@ -287,15 +248,9 @@ pub fn subscribe_to_stream(
   stream stream_name: String,
   options options: kurrentdb.SubscribeToStreamOptions,
 ) -> Promise(Result(Subscription, Error)) {
-  case
-    kurrentdb.subscribe_to_stream_request(client, stream: stream_name, options:)
-  {
-    Error(_) ->
-      promise.resolve(Error(KurrentdbError(kurrentdb.UnableToBuildRequest)))
-    Ok(request) ->
-      transport.open_stream(request)
-      |> promise.map(open_and_subscribe)
-  }
+  kurrentdb.subscribe_to_stream_request(client, stream: stream_name, options:)
+  |> transport.open_stream
+  |> promise.map(open_and_subscribe)
 }
 
 /// Subscribe to `$all`, returning an active `Subscription`.
@@ -303,13 +258,9 @@ pub fn subscribe_to_all(
   client: kurrentdb.Client,
   options options: kurrentdb.SubscribeToAllOptions,
 ) -> Promise(Result(Subscription, Error)) {
-  case kurrentdb.subscribe_to_all_request(client, options:) {
-    Error(_) ->
-      promise.resolve(Error(KurrentdbError(kurrentdb.UnableToBuildRequest)))
-    Ok(request) ->
-      transport.open_stream(request)
-      |> promise.map(open_and_subscribe)
-  }
+  kurrentdb.subscribe_to_all_request(client, options:)
+  |> transport.open_stream
+  |> promise.map(open_and_subscribe)
 }
 
 /// Receive the next message from a subscription, returning the updated subscription.
@@ -342,11 +293,7 @@ pub fn receive_subscription_message(
           Error(frame_error) ->
             promise.resolve(
               Error(
-                KurrentdbError(
-                  kurrentdb.FrameError(grpc_frame_error_to_frame_error(
-                    frame_error,
-                  )),
-                ),
+                KurrentdbError(grpc_frame_error_to_frame_error(frame_error)),
               ),
             )
         }
@@ -369,17 +316,14 @@ pub fn receive_subscription_event(
 }
 
 fn open_and_subscribe(
-  result: Result(#(http_response.Response(Nil), transport.BodyReader), transport.TransportError),
+  result: Result(
+    #(http_response.Response(Nil), transport.BodyReader),
+    transport.TransportError,
+  ),
 ) -> Result(Subscription, Error) {
   case result {
     Ok(#(_, reader)) ->
       Ok(Subscription(reader:, decoder: grpc.new_frame_decoder()))
     Error(e) -> Error(TransportError(e))
   }
-}
-
-/// Close a subscription, releasing the underlying stream reader.
-pub fn close_subscription(_subscription: Subscription) -> Nil {
-  // The transport BodyReader is garbage collected when the reader reference is dropped.
-  Nil
 }

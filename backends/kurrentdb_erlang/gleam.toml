@@ -6,12 +6,13 @@ gleam_stdlib = ">= 1.0.0 and < 2.0.0"
 gleam_erlang = ">= 1.0.0 and < 2.0.0"
 gleam_otp = ">= 1.0.0 and < 2.0.0"
 gleam_http = ">= 4.0.0 and < 5.0.0"
-gun = ">= 2.0.0 and < 3.0.0"
+gleam_hackney = { path = "../../../gleam_hackney" }
 kurrentdb = { path = "../.." }
 
 [dev_dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
 gleam_json = ">= 3.0.0 and < 4.0.0"
+global_value = ">= 1.0.0 and < 2.0.0"
 
 [erlang]
-extra_applications = ["gun"]
+extra_applications = ["hackney"]

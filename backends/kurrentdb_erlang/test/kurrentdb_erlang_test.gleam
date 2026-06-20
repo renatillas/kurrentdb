@@ -1,390 +1,343 @@
 import gleam/erlang/process
 import gleam/float
+import gleam/hackney
+import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option
-import gleam/result
 import gleeunit
+import global_value
+
 import kurrentdb
+import kurrentdb/operation/append_to_stream
+import kurrentdb/operation/delete_stream
+import kurrentdb/operation/read_all
+import kurrentdb/operation/read_stream
+import kurrentdb/operation/subscribe_to_stream
+import kurrentdb/operation/tombstone_stream
+import kurrentdb/stream_metadata
+
 import kurrentdb_erlang
 
 pub fn main() -> Nil {
   gleeunit.main()
 }
 
-const connection_string = "kurrentdb://localhost:2113?tls=false"
+const connection_string = "kurrentdb://admin:changeit@localhost:2113?tls=true"
 
-pub fn append_to_stream_can_be_sent_test() {
-  let name = process.new_name("kurrentdb")
-
-  let assert Ok(_supervisor) = kurrentdb_erlang.start_stream(name)
-
+fn client() -> kurrentdb.Client {
   let assert Ok(client) = kurrentdb.from_connection_string(connection_string)
-
-  let event =
-    kurrentdb.json_event(
-      uuid: "00000000-0000-4000-8000-000000000000",
-      event_type: "kurrentdb-erlang-test",
-      data: json.object([#("runtime", json.string("erlang"))]),
-    )
-
-  let assert Ok(kurrentdb.AppendSuccess(current_revision: 0, position: _)) =
-    kurrentdb.append_to_stream(
-      client,
-      stream: "kurrentdb-erlang-integration",
-      events: [event],
-      options: kurrentdb.default_append_options()
-        |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name),
-    )
+  client
 }
 
-pub fn append_to_stream_can_use_injected_sender_test() {
-  let name = process.new_name("kurrentdb_grpc_stream")
-  let assert Ok(_supervisor) = kurrentdb_erlang.start_stream(name)
+pub type TestGlobalData {
+  GlobalData(kurrentdb_erlang.Connection)
+}
 
-  let assert Ok(client) = kurrentdb.from_connection_string(connection_string)
+fn connection() {
+  global_value.create_with_unique_name("kurrentdb_erlang.global.data", fn() {
+    let assert Ok(connection) =
+      hackney.configure()
+      |> hackney.verify_ca_certificate_file("certs/ca.crt")
+      |> kurrentdb_erlang.start(client())
 
-  let event =
-    kurrentdb.json_event(
-      uuid: "00000000-0000-4000-8000-000000000001",
-      event_type: "kurrentdb-erlang-grpc-stream-test",
-      data: json.object([#("runtime", json.string("erlang"))]),
-    )
+    connection
+  })
+}
 
-  let assert Ok(kurrentdb.AppendSuccess(current_revision: 0, position: _)) =
-    kurrentdb.append_to_stream(
-      client,
-      stream: "kurrentdb-erlang-grpc-stream-integration",
+pub fn append_to_stream_can_be_sent_test() {
+  let stream_name = unique_stream_name("append")
+  let event = json_event("00000000-0000-4000-8000-000000000000", "append")
+
+  let task =
+    kurrentdb_erlang.append_to_stream(
+      connection(),
+      stream: stream_name,
       events: [event],
-      options: kurrentdb.default_append_options()
-        |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name),
+      config: append_to_stream.configure(),
     )
+
+  let assert Ok(append_to_stream.Append(current_revision: 0, position: _)) =
+    kurrentdb_erlang.await(task, within: 10_000)
+}
+
+pub fn append_to_stream_can_use_supervised_workers_test() {
+  let stream_name = unique_stream_name("supervised-append")
+  let event =
+    json_event("00000000-0000-4000-8000-000000000007", "supervised-append")
+
+  let task =
+    kurrentdb_erlang.append_to_stream(
+      connection(),
+      stream: stream_name,
+      events: [event],
+      config: append_to_stream.configure(),
+    )
+
+  let assert Ok(append_to_stream.Append(current_revision: 0, position: _)) =
+    kurrentdb_erlang.await(task, within: 10_000)
 }
 
 pub fn stream_can_be_read_test() {
-  let name = process.new_name("kurrentdb_read_stream")
-  let assert Ok(_supervisor) = kurrentdb_erlang.start_stream(name)
+  let stream_name = unique_stream_name("read-stream")
+  append_event(stream_name, "00000000-0000-4000-8000-000000000001", "read")
 
-  let assert Ok(client) = kurrentdb.from_connection_string(connection_string)
-  let stream_name = unique_stream_name("kurrentdb-erlang-read-integration")
-  let event =
-    kurrentdb.json_event(
-      uuid: "00000000-0000-4000-8000-000000000002",
-      event_type: "kurrentdb-erlang-read-test",
-      data: json.object([#("read", json.string("stream"))]),
-    )
-  let assert Ok(_) =
-    kurrentdb.append_to_stream(
-      client,
+  let stream =
+    kurrentdb_erlang.read_stream(
+      connection(),
+      client(),
       stream: stream_name,
-      events: [event],
-      options: kurrentdb.default_append_options()
-        |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name),
+      config: read_stream.configure() |> read_stream.max_count(1),
     )
 
-  let assert Ok([
-    kurrentdb.Recorded(kurrentdb.RecordedEvent(
-      stream: event_stream,
-      metadata: metadata,
-      data: data,
-      ..,
-    )),
-  ]) =
-    kurrentdb.read_stream_events(
-      client,
-      stream: stream_name,
-      options: kurrentdb.default_read_stream_options()
-        |> kurrentdb.read_stream_max_count(1),
-      using: kurrentdb_erlang.read_transport(name),
-      within: 10_000,
-    )
+  let assert Ok(kurrentdb_erlang.ReadMessage(read_stream.ReadEvent(read_stream.Recorded(read_stream.RecordedEvent(
+    stream: event_stream,
+    metadata: metadata,
+    data: data,
+    ..,
+  ))))) = kurrentdb_erlang.receive(stream, within: 10_000)
+
   assert event_stream == stream_name
-  let assert Ok("kurrentdb-erlang-read-test") = list.key_find(metadata, "type")
-  let assert <<"{\"read\":\"stream\"}">> = data
+  let assert Ok("kurrentdb-erlang-read") = list.key_find(metadata, "type")
+  let assert <<"{\"name\":\"read\"}">> = data
+  kurrentdb_erlang.close(stream)
 }
 
 pub fn stream_can_be_subscribed_to_test() {
-  let name = process.new_name("kurrentdb_subscribe_to_stream")
-  let assert Ok(_supervisor) = kurrentdb_erlang.start_stream(name)
-
-  let assert Ok(client) = kurrentdb.from_connection_string(connection_string)
-  let stream_name = unique_stream_name("kurrentdb-erlang-subscribe-integration")
-
-  let assert Ok(subscription) =
-    kurrentdb.subscribe_to_stream(
-      client,
+  let stream_name = unique_stream_name("subscribe-stream")
+  let subscription =
+    kurrentdb_erlang.subscribe_to_stream(
+      connection(),
+      client(),
       stream: stream_name,
-      options: kurrentdb.default_subscribe_to_stream_options(),
-      using: kurrentdb_erlang.read_transport(name),
-    )
-  let assert Ok(#(subscription, kurrentdb.SubscriptionConfirmed(_))) =
-    kurrentdb.receive_subscription_message(subscription, within: 10_000)
-
-  let event =
-    kurrentdb.json_event(
-      uuid: "00000000-0000-4000-8000-000000000007",
-      event_type: "kurrentdb-erlang-subscribe-test",
-      data: json.object([#("subscribe", json.string("stream"))]),
-    )
-  let assert Ok(_) =
-    kurrentdb.append_to_stream(
-      client,
-      stream: stream_name,
-      events: [event],
-      options: kurrentdb.default_append_options()
-        |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name),
+      config: subscribe_to_stream.configure(),
     )
 
-  let assert Ok(#(
+  let assert Ok(kurrentdb_erlang.ReadMessage(read_stream.SubscriptionConfirmed(
     _,
-    kurrentdb.Recorded(kurrentdb.RecordedEvent(
-      stream: event_stream,
-      data: data,
-      ..,
-    )),
-  )) = kurrentdb.receive_subscription_event(subscription, within: 10_000)
+  ))) = kurrentdb_erlang.receive(subscription, within: 10_000)
+
+  append_event(stream_name, "00000000-0000-4000-8000-000000000002", "subscribe")
+
+  let assert Ok(read_stream.Recorded(read_stream.RecordedEvent(
+    stream: event_stream,
+    data: data,
+    ..,
+  ))) = receive_read_event(subscription)
 
   assert event_stream == stream_name
-  let assert <<"{\"subscribe\":\"stream\"}">> = data
+  let assert <<"{\"name\":\"subscribe\"}">> = data
+  kurrentdb_erlang.close(subscription)
 }
 
-pub fn all_stream_can_be_subscribed_to_test() {
-  let name = process.new_name("kurrentdb_subscribe_to_all")
-  let assert Ok(_supervisor) = kurrentdb_erlang.start_stream(name)
-
-  let assert Ok(client) = kurrentdb.from_connection_string(connection_string)
-  let stream_name = unique_stream_name("kurrentdb-erlang-subscribe-all")
-  let event_type = unique_stream_name("kurrentdb-erlang-subscribe-all-test")
-
-  let assert Ok(subscription) =
-    kurrentdb.subscribe_to_all(
-      client,
-      options: kurrentdb.default_subscribe_to_all_options()
-        |> kurrentdb.subscribe_to_all_filter(kurrentdb.EventTypePrefix(
-          prefixes: [event_type],
-          window: kurrentdb.FilterMax(10),
-        )),
-      using: kurrentdb_erlang.read_transport(name),
-    )
-  let assert Ok(#(subscription, _)) =
-    kurrentdb.receive_subscription_message(subscription, within: 10_000)
-
-  let event =
-    kurrentdb.json_event(
-      uuid: "00000000-0000-4000-8000-000000000008",
-      event_type: event_type,
-      data: json.object([#("subscribe", json.string("all"))]),
-    )
-  let assert Ok(_) =
-    kurrentdb.append_to_stream(
-      client,
+pub fn stream_events_can_be_subscribed_to_with_callback_test() {
+  let stream_name = unique_stream_name("subscribe-stream-callback")
+  let events = process.new_subject()
+  let subscription =
+    kurrentdb_erlang.subscribe_to_stream_events(
+      connection(),
+      client(),
       stream: stream_name,
-      events: [event],
-      options: kurrentdb.default_append_options()
-        |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name),
+      config: subscribe_to_stream.configure(),
+      on_event: fn(event) { process.send(events, event) },
     )
 
-  let assert Ok(#(
-    _,
-    kurrentdb.Recorded(kurrentdb.RecordedEvent(
-      stream: event_stream,
-      data: data,
-      ..,
-    )),
-  )) = receive_subscription_event_by_type(subscription, event_type)
+  append_event(
+    stream_name,
+    "00000000-0000-4000-8000-000000000008",
+    "subscribe-callback",
+  )
+
+  let assert Ok(read_stream.Recorded(read_stream.RecordedEvent(
+    stream: event_stream,
+    data: data,
+    ..,
+  ))) = process.receive(events, within: 10_000)
+
   assert event_stream == stream_name
-  let assert <<"{\"subscribe\":\"all\"}">> = data
+  let assert <<"{\"name\":\"subscribe-callback\"}">> = data
+  kurrentdb_erlang.close_subscription(subscription)
 }
 
 pub fn all_stream_can_be_read_test() {
-  let name = process.new_name("kurrentdb_read_all")
-  let assert Ok(_supervisor) = kurrentdb_erlang.start_stream(name)
+  let stream_name = unique_stream_name("read-all")
+  let event_type = unique_event_type("read-all")
+  append_typed_event(
+    stream_name,
+    "00000000-0000-4000-8000-000000000003",
+    event_type,
+    "all",
+  )
 
-  let assert Ok(client) = kurrentdb.from_connection_string(connection_string)
-  let stream_name = unique_stream_name("kurrentdb-erlang-read-all-integration")
-  let event_type = unique_stream_name("kurrentdb-erlang-read-all-test")
-
-  let event =
-    kurrentdb.json_event(
-      uuid: "00000000-0000-4000-8000-000000000005",
-      event_type: event_type,
-      data: json.object([#("read", json.string("all"))]),
-    )
-  let assert Ok(_) =
-    kurrentdb.append_to_stream(
-      client,
-      stream: stream_name,
-      events: [event],
-      options: kurrentdb.default_append_options()
-        |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name),
-    )
-
-  let assert Ok([
-    kurrentdb.ReadEvent(kurrentdb.Recorded(kurrentdb.RecordedEvent(
-      stream: event_stream,
-      data: data,
-      ..,
-    ))),
-  ]) =
-    kurrentdb.read_all(
-      client,
-      options: kurrentdb.default_read_all_options()
-        |> kurrentdb.read_all_direction(kurrentdb.Backwards)
-        |> kurrentdb.read_all_from_position(kurrentdb.ReadAllFromEnd)
-        |> kurrentdb.read_all_max_count(10)
-        |> kurrentdb.read_all_filter(kurrentdb.EventTypePrefix(
+  let stream =
+    kurrentdb_erlang.read_all(
+      connection(),
+      client(),
+      config: read_all.configure()
+        |> read_all.direction(read_all.Backwards)
+        |> read_all.position(read_all.FromEnd)
+        |> read_all.max_count(10)
+        |> read_all.filter(read_all.EventTypePrefix(
           prefixes: [event_type],
-          window: kurrentdb.FilterMax(10),
+          window: read_all.FilterMax(10),
         )),
-      using: kurrentdb_erlang.read_transport(name),
-      within: 10_000,
     )
+
+  let assert Ok(read_stream.Recorded(read_stream.RecordedEvent(
+    stream: event_stream,
+    data: data,
+    ..,
+  ))) = receive_read_event(stream)
+
   assert event_stream == stream_name
-  let assert <<"{\"read\":\"all\"}">> = data
+  let assert <<"{\"name\":\"all\"}">> = data
+  kurrentdb_erlang.close(stream)
 }
 
 pub fn stream_can_be_deleted_test() {
-  let name = process.new_name("kurrentdb_delete_stream")
-  let assert Ok(_supervisor) = kurrentdb_erlang.start_stream(name)
+  let stream_name = unique_stream_name("delete")
+  append_event(stream_name, "00000000-0000-4000-8000-000000000004", "delete")
 
-  let assert Ok(client) = kurrentdb.from_connection_string(connection_string)
-  let stream_name = unique_stream_name("kurrentdb-erlang-delete-integration")
-  let event =
-    kurrentdb.json_event(
-      uuid: "00000000-0000-4000-8000-000000000003",
-      event_type: "kurrentdb-erlang-delete-test",
-      data: json.object([#("delete", json.string("stream"))]),
-    )
-  let assert Ok(_) =
-    kurrentdb.append_to_stream(
-      client,
+  let task =
+    kurrentdb_erlang.delete_stream(
+      connection(),
       stream: stream_name,
-      events: [event],
-      options: kurrentdb.default_append_options()
-        |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name),
+      config: delete_stream.configure(),
     )
 
-  let assert Ok(kurrentdb.DeleteSuccess(position: _)) =
-    kurrentdb.delete_stream(
-      client,
-      stream: stream_name,
-      options: kurrentdb.default_delete_options()
-        |> kurrentdb.delete_expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name),
-    )
+  let assert Ok(delete_stream.Delete(position: _)) =
+    kurrentdb_erlang.await(task, within: 10_000)
 }
 
 pub fn stream_can_be_tombstoned_test() {
-  let name = process.new_name("kurrentdb_tombstone_stream")
-  let assert Ok(_supervisor) = kurrentdb_erlang.start_stream(name)
+  let stream_name = unique_stream_name("tombstone")
+  append_event(stream_name, "00000000-0000-4000-8000-000000000005", "tombstone")
 
-  let assert Ok(client) = kurrentdb.from_connection_string(connection_string)
-  let stream_name = unique_stream_name("kurrentdb-erlang-tombstone-integration")
-
-  let event =
-    kurrentdb.json_event(
-      uuid: "00000000-0000-4000-8000-000000000004",
-      event_type: "kurrentdb-erlang-tombstone-test",
-      data: json.object([#("tombstone", json.string("stream"))]),
-    )
-  let assert Ok(_) =
-    kurrentdb.append_to_stream(
-      client,
+  let task =
+    kurrentdb_erlang.tombstone_stream(
+      connection(),
       stream: stream_name,
-      events: [event],
-      options: kurrentdb.default_append_options()
-        |> kurrentdb.expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name),
+      config: tombstone_stream.configure(),
     )
 
-  let assert Ok(kurrentdb.TombstoneSuccess(position: _)) =
-    kurrentdb.tombstone_stream(
-      client,
-      stream: stream_name,
-      options: kurrentdb.default_tombstone_options()
-        |> kurrentdb.tombstone_expected_revision(kurrentdb.Any),
-      using: kurrentdb_erlang.send(name),
-    )
+  let assert Ok(tombstone_stream.Tombstone(position: _)) =
+    kurrentdb_erlang.await(task, within: 10_000)
 }
 
 pub fn stream_metadata_can_be_set_and_read_test() {
-  let name = process.new_name("kurrentdb_stream_metadata")
-  let assert Ok(_supervisor) = kurrentdb_erlang.start_stream(name)
-
-  let assert Ok(client) = kurrentdb.from_connection_string(connection_string)
-  let stream_name = unique_stream_name("kurrentdb-erlang-metadata-integration")
-
+  let stream_name = unique_stream_name("metadata")
   let metadata =
-    kurrentdb.stream_metadata()
-    |> kurrentdb.metadata_max_count(10)
-    |> kurrentdb.metadata_max_age(60)
-    |> kurrentdb.metadata_custom("owner", json.string("billing"))
+    stream_metadata.new()
+    |> stream_metadata.max_count(10)
+    |> stream_metadata.max_age(60)
+    |> stream_metadata.custom("owner", json.string("billing"))
 
-  let assert Ok(kurrentdb.AppendSuccess(current_revision: _, position: _)) =
-    kurrentdb.set_stream_metadata(
-      client,
+  let set_task =
+    kurrentdb_erlang.set_stream_metadata(
+      connection(),
       stream: stream_name,
       metadata: metadata,
       uuid: "00000000-0000-4000-8000-000000000006",
-      options: kurrentdb.default_set_stream_metadata_options(),
-      using: kurrentdb_erlang.send(name),
+      config: append_to_stream.configure(),
+    )
+  let assert Ok(append_to_stream.Append(current_revision: _, position: _)) =
+    kurrentdb_erlang.await(set_task, within: 10_000)
+
+  let get_task =
+    kurrentdb_erlang.get_stream_metadata(
+      connection(),
+      client(),
+      stream: stream_name,
+      config: read_stream.configure()
+        |> read_stream.read_direction(read_stream.Backwards)
+        |> read_stream.from_revision(read_stream.FromEnd)
+        |> read_stream.max_count(1),
     )
 
-  let assert Ok(kurrentdb.StreamMetadata(
+  let assert Ok(stream_metadata.StreamMetadata(
     max_count: option.Some(10),
     max_age: option.Some(60),
     ..,
-  )) =
-    kurrentdb.get_stream_metadata(
-      client,
-      stream: stream_name,
-      using: kurrentdb_erlang.read_transport(name),
-      within: 10_000,
-    )
+  )) = kurrentdb_erlang.await(get_task, within: 10_000)
 }
 
-fn receive_subscription_event_by_type(
-  subscription: kurrentdb.Subscription(
-    kurrentdb_erlang.GrpcStream,
-    kurrentdb_erlang.Error,
-  ),
+fn append_event(stream_name: String, uuid: String, name: String) -> Nil {
+  append_typed_event(stream_name, uuid, "kurrentdb-erlang-" <> name, name)
+}
+
+fn append_typed_event(
+  stream_name: String,
+  uuid: String,
   event_type: String,
-) -> Result(
-  #(
-    kurrentdb.Subscription(kurrentdb_erlang.GrpcStream, kurrentdb_erlang.Error),
-    kurrentdb.ReadEvent,
-  ),
-  kurrentdb.OperationError(kurrentdb_erlang.Error),
-) {
-  use received <- result.try(kurrentdb.receive_subscription_event(
-    subscription,
-    within: 10_000,
-  ))
-  let #(subscription, event) = received
-  case read_event_type(event) == Ok(event_type) {
-    True -> Ok(#(subscription, event))
-    False -> receive_subscription_event_by_type(subscription, event_type)
-  }
+  name: String,
+) -> Nil {
+  let task =
+    kurrentdb_erlang.append_to_stream(
+      connection(),
+      stream: stream_name,
+      events: [typed_json_event(uuid, event_type, name)],
+      config: append_to_stream.configure(),
+    )
+
+  let _ = kurrentdb_erlang.await(task, within: 10_000)
+
+  Nil
 }
 
-fn read_event_type(event: kurrentdb.ReadEvent) -> Result(String, Nil) {
-  case event {
-    kurrentdb.Recorded(kurrentdb.RecordedEvent(metadata: metadata, ..)) ->
-      list.key_find(metadata, "type")
-    kurrentdb.Resolved(
-      event: kurrentdb.RecordedEvent(metadata: metadata, ..),
-      ..,
-    ) -> list.key_find(metadata, "type")
+fn json_event(uuid: String, name: String) -> append_to_stream.Event {
+  typed_json_event(uuid, "kurrentdb-erlang-" <> name, name)
+}
+
+fn typed_json_event(
+  uuid: String,
+  event_type: String,
+  name: String,
+) -> append_to_stream.Event {
+  append_to_stream.json_event(
+    uuid: uuid,
+    event_type: event_type,
+    data: json.object([#("name", json.string(name))]),
+  )
+}
+
+fn receive_read_event(
+  stream: kurrentdb_erlang.Stream,
+) -> Result(read_stream.ReadEvent, Nil) {
+  case kurrentdb_erlang.receive(stream, within: 10_000) {
+    Ok(kurrentdb_erlang.ReadEvent(event)) -> Ok(event)
+    Ok(kurrentdb_erlang.ReadMessage(read_stream.ReadEvent(event))) -> Ok(event)
+    Ok(kurrentdb_erlang.ReadMessage(read_stream.SubscriptionConfirmed(_))) ->
+      receive_read_event(stream)
+    Ok(kurrentdb_erlang.ReadMessage(read_stream.Checkpoint(_))) ->
+      receive_read_event(stream)
+    Ok(kurrentdb_erlang.ReadMessage(read_stream.CaughtUp(_))) ->
+      receive_read_event(stream)
+    Ok(kurrentdb_erlang.ReadMessage(read_stream.FellBehind(_))) ->
+      receive_read_event(stream)
+    Ok(kurrentdb_erlang.ReadMessage(read_stream.FirstStreamPosition(_))) ->
+      receive_read_event(stream)
+    Ok(kurrentdb_erlang.ReadMessage(read_stream.LastStreamPosition(_))) ->
+      receive_read_event(stream)
+    Ok(kurrentdb_erlang.ReadMessage(read_stream.LastAllStreamPosition(_))) ->
+      receive_read_event(stream)
+    Ok(kurrentdb_erlang.ReadMessage(read_stream.ReadIgnored)) ->
+      receive_read_event(stream)
+    Ok(kurrentdb_erlang.StreamFinished) -> Error(Nil)
+    Ok(kurrentdb_erlang.StreamFailed(_)) -> Error(Nil)
+    Error(Nil) -> Error(Nil)
   }
 }
 
 fn unique_stream_name(prefix: String) -> String {
-  prefix <> "-" <> float.to_string(float.random())
+  "kurrentdb-erlang-" <> prefix <> "-" <> unique_suffix()
+}
+
+fn unique_event_type(prefix: String) -> String {
+  "kurrentdb-erlang-" <> prefix <> "-type-" <> unique_suffix()
+}
+
+fn unique_suffix() -> String {
+  float.random() *. 1_000_000_000.0
+  |> float.round
+  |> int.to_string
 }

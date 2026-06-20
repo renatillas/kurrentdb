@@ -1,7 +1,7 @@
 import gleam/bit_array
 import gleam/float
-import gleam/json
 import gleam/javascript/promise.{type Promise}
+import gleam/json
 import gleam/list
 import gleam/option
 import gleeunit
@@ -11,10 +11,12 @@ import kurrentdb_javascript
 const connection_string = "kurrentdb://localhost:2113?tls=false"
 
 const read_stream_data = "{\"read\":\"stream\"}"
-const read_all_data = "{\"read\":\"all\"}"
-const subscribe_stream_data = "{\"subscribe\":\"stream\"}"
-const subscribe_all_data = "{\"subscribe\":\"all\"}"
 
+const read_all_data = "{\"read\":\"all\"}"
+
+const subscribe_stream_data = "{\"subscribe\":\"stream\"}"
+
+const subscribe_all_data = "{\"subscribe\":\"all\"}"
 
 pub fn main() -> Nil {
   gleeunit.main()
@@ -149,14 +151,18 @@ pub fn stream_can_be_read_test() -> Promise(Nil) {
       let events = unwrap_read_events(events_result)
 
       case events {
-        [kurrentdb.Recorded(kurrentdb.RecordedEvent(
-          stream: event_stream,
-          data: data,
-          metadata: metadata,
+        [
+          kurrentdb.Recorded(kurrentdb.RecordedEvent(
+            stream: event_stream,
+            data: data,
+            metadata: metadata,
+            ..,
+          )),
           ..
-        )), ..] -> {
+        ] -> {
           assert event_stream == stream_name
-          let assert Ok("kurrentdb-js-read-test") = list.key_find(metadata, "type")
+          let assert Ok("kurrentdb-js-read-test") =
+            list.key_find(metadata, "type")
           assert data == bit_array.from_string(read_stream_data)
           Nil
         }
@@ -207,12 +213,11 @@ pub fn stream_can_be_subscribed_to_test() -> Promise(Nil) {
             kurrentdb.Recorded(kurrentdb.RecordedEvent(
               stream: event_stream,
               data: data,
-              ..
+              ..,
             )),
           )) = event_result
           assert event_stream == stream_name
           assert data == bit_array.from_string(subscribe_stream_data)
-          kurrentdb_javascript.close_subscription(subscription)
         })
       })
     })
@@ -261,12 +266,11 @@ pub fn all_stream_can_be_subscribed_to_test() -> Promise(Nil) {
             kurrentdb.Recorded(kurrentdb.RecordedEvent(
               stream: event_stream,
               data: data,
-              ..
+              ..,
             )),
           )) = result
           assert event_stream == stream_name
           assert data == bit_array.from_string(subscribe_all_data)
-          kurrentdb_javascript.close_subscription(subscription)
         })
       })
     })
@@ -309,11 +313,14 @@ pub fn all_stream_can_be_read_test() -> Promise(Nil) {
       let messages = unwrap_read_messages(messages_result)
 
       case messages {
-        [kurrentdb.ReadEvent(kurrentdb.Recorded(kurrentdb.RecordedEvent(
-          stream: event_stream,
-          data: data,
+        [
+          kurrentdb.ReadEvent(kurrentdb.Recorded(kurrentdb.RecordedEvent(
+            stream: event_stream,
+            data: data,
+            ..,
+          ))),
           ..
-        ))), ..] -> {
+        ] -> {
           assert event_stream == stream_name
           assert data == bit_array.from_string(read_all_data)
           Nil
@@ -400,7 +407,7 @@ pub fn stream_metadata_can_be_set_and_read_test() -> Promise(Nil) {
     stream: stream_name,
     metadata: metadata,
     uuid: "00000000-0000-4000-8000-000000000006",
-    options: kurrentdb.default_set_stream_metadata_options(),
+    options: kurrentdb.default_append_options(),
   )
   |> promise.await(fn(append_result) {
     let _ = unwrap_appended(append_result)
